@@ -1,0 +1,164 @@
+import numpy as np
+
+
+def sigmoid(z):
+    z = np.clip(z, -500, 500)
+    return 1.0 / (1.0 + np.exp(-z))
+
+
+def sigmoid_derivative_from_activation(a):
+    """Given a = sigmoid(z), returns sigma'(z) = a * (1 - a)."""
+    return a * (1.0 - a)
+
+
+class NeuralNetworkBackprop:
+    def __init__(self, input_size, hidden_size, output_size, learning_rate=0.5, seed=42):
+        rng = np.random.default_rng(seed)
+        self.lr = learning_rate
+
+        # Weight initialization
+        self.W1 = rng.normal(0.0, 1.0 / np.sqrt(input_size), size=(input_size, hidden_size))
+        self.b1 = np.zeros((1, hidden_size))
+
+        self.W2 = rng.normal(0.0, 1.0 / np.sqrt(hidden_size), size=(hidden_size, output_size))
+        self.b2 = np.zeros((1, output_size))
+
+    def forward(self, X):
+        self.z1 = X @ self.W1 + self.b1
+        self.a1 = sigmoid(self.z1)
+
+        self.z2 = self.a1 @ self.W2 + self.b2
+        self.a2 = sigmoid(self.z2)
+        return self.a2
+
+    def compute_loss(self, y_true, y_pred):
+        n = y_true.shape[0]
+        return 0.5 * np.mean(np.sum((y_true - y_pred) ** 2, axis=1))
+
+    def backward(self, X, y_true, y_pred):
+        n = X.shape[0]
+
+        # Output layer error & gradients
+        dL_da2 = (y_pred - y_true) / n
+        delta2 = dL_da2 * sigmoid_derivative_from_activation(self.a2)
+        dW2 = self.a1.T @ delta2
+        db2 = np.sum(delta2, axis=0, keepdims=True)
+
+        # Hidden layer error & gradients
+        delta1 = (delta2 @ self.W2.T) * sigmoid_derivative_from_activation(self.a1)
+        dW1 = X.T @ delta1
+        db1 = np.sum(delta1, axis=0, keepdims=True)
+
+        # Gradient descent update
+        self.W2 -= self.lr * dW2
+        self.b2 -= self.lr * db2
+        self.W1 -= self.lr * dW1
+        self.b1 -= self.lr * db1
+
+    def train(self, X, y, epochs=5000, log_every=1000):
+        history = []
+        for epoch in range(1, epochs + 1):
+            y_pred = self.forward(X)
+            loss = self.compute_loss(y, y_pred)
+            history.append(loss)
+            self.backward(X, y, y_pred)
+
+            if log_every and (epoch == 1 or epoch % log_every == 0 or epoch == epochs):
+                preds_bin = (y_pred >= 0.5).astype(int)
+                acc = np.mean(preds_bin == y.astype(int)) * 100.0
+                print(f"Epoch {epoch:5d}/{epochs} | Loss: {loss:.6f} | Accuracy: {acc:6.2f}%")
+        return history
+
+    def predict(self, X, threshold=0.5):
+        probs = self.forward(X)
+        return probs, (probs >= threshold).astype(int)
+
+
+# ==========================================
+# Experiment 1: XOR Dataset (Non-Linearly Separable)
+# ==========================================
+print("=== Experiment 1: XOR Gate ===")
+X_xor = np.array([
+    [0.0, 0.0],
+    [0.0, 1.0],
+    [1.0, 0.0],
+    [1.0, 1.0],
+])
+y_xor = np.array([
+    [0.0],
+    [1.0],
+    [1.0],
+    [0.0],
+])
+
+nn_xor = NeuralNetworkBackprop(input_size=2, hidden_size=4, output_size=1, learning_rate=2.0, seed=42)
+nn_xor.train(X_xor, y_xor, epochs=5000, log_every=1000)
+
+xor_probs, xor_preds = nn_xor.predict(X_xor)
+print("\nXOR Final Predictions:")
+for inp, target, prob, pred in zip(X_xor, y_xor, xor_probs, xor_preds):
+    print(f"  Input: {inp.astype(int)} | Target: {int(target[0])} | Prob: {prob[0]:.4f} | Pred: {int(pred[0])}")
+
+
+# ==========================================
+# Experiment 2: Train/Test Split on a Synthetic Classification Dataset
+# ==========================================
+print("\n=== Experiment 2: 3-Feature Binary Classification Dataset ===")
+rng = np.random.default_rng(101)
+N_samples = 200
+X_tab = rng.uniform(-2.0, 2.0, size=(N_samples, 3))
+# Non-linear decision rule: x0^2 + x1 - 0.5*x2 > 0.5
+decision_val = (X_tab[:, 0] ** 2) + X_tab[:, 1] - 0.5 * X_tab[:, 2]
+y_tab = (decision_val > 0.5).astype(float).reshape(-1, 1)
+
+# Feature standardization using training mean/std only
+split_idx = int(0.8 * N_samples)
+X_train_raw, X_test_raw = X_tab[:split_idx], X_tab[split_idx:]
+y_train, y_test = y_tab[:split_idx], y_tab[split_idx:]
+
+mean = X_train_raw.mean(axis=0, keepdims=True)
+std = X_train_raw.std(axis=0, keepdims=True) + 1e-8
+X_train = (X_train_raw - mean) / std
+X_test = (X_test_raw - mean) / std
+
+nn_tab = NeuralNetworkBackprop(input_size=3, hidden_size=8, output_size=1, learning_rate=1.0, seed=7)
+nn_tab.train(X_train, y_train, epochs=3000, log_every=1000)
+
+test_probs, test_preds = nn_tab.predict(X_test)
+test_acc = np.mean(test_preds == y_test.astype(int)) * 100.0
+print(f"\nTest Set Accuracy ({len(X_test)} unseen samples): {test_acc:.2f}%")
+print("First 5 Test Predictions (Target vs Predicted):")
+for i in range(5):
+    print(f"  Sample {i+1}: Target={int(y_test[i, 0])}, Prob={test_probs[i, 0]:.4f}, Pred={int(test_preds[i, 0])}")
+
+
+
+output :
+
+=== Experiment 1: XOR Gate ===
+Epoch     1/5000 | Loss: 0.130191 | Accuracy:  50.00%
+Epoch  1000/5000 | Loss: 0.003344 | Accuracy: 100.00%
+Epoch  2000/5000 | Loss: 0.001189 | Accuracy: 100.00%
+Epoch  3000/5000 | Loss: 0.000698 | Accuracy: 100.00%
+Epoch  4000/5000 | Loss: 0.000487 | Accuracy: 100.00%
+Epoch  5000/5000 | Loss: 0.000371 | Accuracy: 100.00%
+
+XOR Final Predictions:
+  Input: [0 0] | Target: 0 | Prob: 0.0226 | Pred: 0
+  Input: [0 1] | Target: 1 | Prob: 0.9746 | Pred: 1
+  Input: [1 0] | Target: 1 | Prob: 0.9737 | Pred: 1
+  Input: [1 1] | Target: 0 | Prob: 0.0176 | Pred: 0
+
+=== Experiment 2: 3-Feature Binary Classification Dataset ===
+Epoch     1/3000 | Loss: 0.130040 | Accuracy:  58.12%
+Epoch  1000/3000 | Loss: 0.014834 | Accuracy:  96.88%
+Epoch  2000/3000 | Loss: 0.009139 | Accuracy:  97.50%
+Epoch  3000/3000 | Loss: 0.006761 | Accuracy:  98.12%
+
+Test Set Accuracy (40 unseen samples): 97.50%
+First 5 Test Predictions (Target vs Predicted):
+  Sample 1: Target=0, Prob=0.0004, Pred=0
+  Sample 2: Target=1, Prob=0.9967, Pred=1
+  Sample 3: Target=1, Prob=0.9994, Pred=1
+  Sample 4: Target=0, Prob=0.0001, Pred=0
+  Sample 5: Target=1, Prob=0.9995, Pred=1
