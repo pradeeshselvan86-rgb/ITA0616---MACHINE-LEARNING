@@ -1,0 +1,147 @@
+import numpy as np
+
+
+class LinearRegressionGD:
+    """Multiple Linear Regression trained via Batch Gradient Descent."""
+
+    def __init__(self, learning_rate=0.05, epochs=2000):
+        self.lr = learning_rate
+        self.epochs = epochs
+        self.weights = None
+        self.bias = None
+        self.loss_history = []
+
+    def fit(self, X, y):
+        X = np.asarray(X, dtype=float)
+        y = np.asarray(y, dtype=float).reshape(-1, 1)
+
+        n_samples, n_features = X.shape
+        self.weights = np.zeros((n_features, 1), dtype=float)
+        self.bias = 0.0
+        self.loss_history = []
+
+        for _ in range(self.epochs):
+            y_pred = X @ self.weights + self.bias
+            error = y_pred - y
+
+            cost = 0.5 * np.mean(error ** 2)
+            self.loss_history.append(float(cost))
+
+            dw = (X.T @ error) / n_samples
+            db = float(np.mean(error))
+
+            self.weights -= self.lr * dw
+            self.bias -= self.lr * db
+
+        return self
+
+    def predict(self, X):
+        X = np.asarray(X, dtype=float)
+        return (X @ self.weights + self.bias).ravel()
+
+
+def fit_normal_equation(X, y):
+    """Closed-form solution returning (weights, bias)."""
+    X = np.asarray(X, dtype=float)
+    y = np.asarray(y, dtype=float).reshape(-1, 1)
+
+    ones = np.ones((X.shape[0], 1), dtype=float)
+    X_b = np.hstack([ones, X])
+    theta = np.linalg.pinv(X_b.T @ X_b) @ (X_b.T @ y)
+
+    bias = float(theta[0, 0])
+    weights = theta[1:].ravel()
+    return weights, bias
+
+
+def predict_normal_equation(X, weights, bias):
+    X = np.asarray(X, dtype=float)
+    return (X @ weights + bias).ravel()
+
+
+def standardize_splits(X_train, X_test):
+    mean = np.mean(X_train, axis=0)
+    std = np.std(X_train, axis=0)
+    std = np.where(std == 0, 1.0, std)
+    return (X_train - mean) / std, (X_test - mean) / std
+
+
+def evaluate_regression(y_true, y_pred):
+    y_true = np.asarray(y_true, dtype=float)
+    y_pred = np.asarray(y_pred, dtype=float)
+
+    mse = float(np.mean((y_true - y_pred) ** 2))
+    rmse = float(np.sqrt(mse))
+    mae = float(np.mean(np.abs(y_true - y_pred)))
+
+    ss_res = np.sum((y_true - y_pred) ** 2)
+    ss_tot = np.sum((y_true - np.mean(y_true)) ** 2)
+    r2 = float(1.0 - (ss_res / ss_tot)) if ss_tot > 0 else 0.0
+
+    return {"MSE": mse, "RMSE": rmse, "MAE": mae, "R2": r2}
+
+
+if __name__ == "__main__":
+    # Generate a reproducible multi-feature regression dataset
+    rng = np.random.default_rng(42)
+    n_samples = 200
+
+    # True underlying relationship: y = 4.5 + 3.2*x1 - 2.0*x2 + 1.5*x3 + noise
+    X_raw = np.column_stack([
+        rng.uniform(0, 10, size=n_samples),
+        rng.normal(5.0, 2.0, size=n_samples),
+        rng.uniform(-3.0, 3.0, size=n_samples),
+    ])
+    noise = rng.normal(0.0, 1.0, size=n_samples)
+    y_all = 4.5 + 3.2 * X_raw[:, 0] - 2.0 * X_raw[:, 1] + 1.5 * X_raw[:, 2] + noise
+
+    # Train/Test split (80% train / 20% test)
+    perm = rng.permutation(n_samples)
+    X_raw, y_all = X_raw[perm], y_all[perm]
+
+    split = int(0.8 * n_samples)
+    X_train_raw, X_test_raw = X_raw[:split], X_raw[split:]
+    y_train, y_test = y_all[:split], y_all[split:]
+
+    # 1. Gradient Descent (on standardized features)
+    X_train_std, X_test_std = standardize_splits(X_train_raw, X_test_raw)
+    model_gd = LinearRegressionGD(learning_rate=0.05, epochs=1500).fit(X_train_std, y_train)
+    preds_gd = model_gd.predict(X_test_std)
+    metrics_gd = evaluate_regression(y_test, preds_gd)
+
+    # 2. Normal Equation (on raw features)
+    w_ne, b_ne = fit_normal_equation(X_train_raw, y_train)
+    preds_ne = predict_normal_equation(X_test_raw, w_ne, b_ne)
+    metrics_ne = evaluate_regression(y_test, preds_ne)
+
+    print("=== Linear Regression via Gradient Descent ===")
+    print(f"Initial Cost: {model_gd.loss_history[0]:.4f} -> Final Cost: {model_gd.loss_history[-1]:.4f}")
+    print(f"Metrics: MSE={metrics_gd['MSE']:.4f}, RMSE={metrics_gd['RMSE']:.4f}, MAE={metrics_gd['MAE']:.4f}, R2={metrics_gd['R2']:.4f}")
+
+    print("\n=== Linear Regression via Normal Equation ===")
+    print(f"Learned Weights: {w_ne.round(4)} | Bias: {b_ne:.4f}")
+    print(f"Metrics: MSE={metrics_ne['MSE']:.4f}, RMSE={metrics_ne['RMSE']:.4f}, MAE={metrics_ne['MAE']:.4f}, R2={metrics_ne['R2']:.4f}")
+
+    print("\nSample Test Predictions (Actual vs GD vs Normal Eq):")
+    for i in range(5):
+        print(f"  Sample {i+1}: Actual={y_test[i]:7.3f} | GD={preds_gd[i]:7.3f} | NormalEq={preds_ne[i]:7.3f}")
+
+
+
+output :
+
+
+=== Linear Regression via Gradient Descent ===
+Initial Cost: 121.0289 -> Final Cost: 0.4832
+Metrics: MSE=1.1869, RMSE=1.0894, MAE=0.8758, R2=0.9776
+
+=== Linear Regression via Normal Equation ===
+Learned Weights: [ 3.2181 -1.9647  1.4307] | Bias: 4.3806
+Metrics: MSE=1.1869, RMSE=1.0894, MAE=0.8758, R2=0.9776
+
+Sample Test Predictions (Actual vs GD vs Normal Eq):
+  Sample 1: Actual= 14.374 | GD= 13.719 | NormalEq= 13.719
+  Sample 2: Actual= 22.845 | GD= 23.913 | NormalEq= 23.913
+  Sample 3: Actual= 24.442 | GD= 24.892 | NormalEq= 24.892
+  Sample 4: Actual= 18.886 | GD= 17.619 | NormalEq= 17.619
+  Sample 5: Actual= 19.654 | GD= 18.876 | NormalEq= 18.876
