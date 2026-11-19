@@ -1,0 +1,102 @@
+{
+  "nbformat": 4,
+  "nbformat_minor": 0,
+  "metadata": {
+    "colab": {
+      "provenance": [],
+      "authorship_tag": "ABX9TyO3tUa7BXPhVpFz3snaLMGe",
+      "include_colab_link": true
+    },
+    "kernelspec": {
+      "name": "python3",
+      "display_name": "Python 3"
+    },
+    "language_info": {
+      "name": "python"
+    }
+  },
+  "cells": [
+    {
+      "cell_type": "markdown",
+      "metadata": {
+        "id": "view-in-github",
+        "colab_type": "text"
+      },
+      "source": [
+        "<a href=\"https://colab.research.google.com/github/pradeeshselvan86-rgb/ITA0616---MACHINE-LEARNING/blob/main/exp%201\" target=\"_parent\"><img src=\"https://colab.research.google.com/assets/colab-badge.svg\" alt=\"Open In Colab\"/></a>"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "execution_count": 1,
+      "metadata": {
+        "colab": {
+          "base_uri": "https://localhost:8080/"
+        },
+        "id": "xUjWOMCVvfC2",
+        "outputId": "7ed0d484-c04a-4675-a440-2c92ca0b3bcb"
+      },
+      "outputs": [
+        {
+          "output_type": "stream",
+          "name": "stdout",
+          "text": [
+            "Initial Hypothesis h0: ['0', '0', '0', '0', '0', '0']\n",
+            "\n",
+            "Instance 1 (Positive): ['Sunny', 'Warm', 'Normal', 'Strong', 'Warm', 'Same'] -> h1 = ['Sunny', 'Warm', 'Normal', 'Strong', 'Warm', 'Same']\n",
+            "Instance 2 (Positive): ['Sunny', 'Warm', 'High', 'Strong', 'Warm', 'Same'] -> h2 = ['Sunny', 'Warm', '?', 'Strong', 'Warm', 'Same']\n",
+            "Instance 3 (Negative): ['Rainy', 'Cold', 'High', 'Strong', 'Warm', 'Change'] -> Ignored, h3 = ['Sunny', 'Warm', '?', 'Strong', 'Warm', 'Same']\n",
+            "Instance 4 (Positive): ['Sunny', 'Warm', 'High', 'Strong', 'Cool', 'Change'] -> h4 = ['Sunny', 'Warm', '?', 'Strong', '?', '?']\n",
+            "\n",
+            "Most Specific Hypothesis:\n",
+            "['Sunny', 'Warm', '?', 'Strong', '?', '?']\n"
+          ]
+        }
+      ],
+      "source": [
+        "import csv\n",
+        "\n",
+        "\n",
+        "def find_s(training_data):\n",
+        "    \"\"\"\n",
+        "    Finds the most specific hypothesis consistent with positive training examples.\n",
+        "    training_data: list of rows where the last column is the class label ('Yes' / 'No').\n",
+        "    \"\"\"\n",
+        "    num_attributes = len(training_data[0]) - 1\n",
+        "    # Initialize most specific hypothesis: ['0', '0', ..., '0'] representing Phi\n",
+        "    hypothesis = [\"0\"] * num_attributes\n",
+        "\n",
+        "    print(f\"Initial Hypothesis h0: {hypothesis}\\n\")\n",
+        "\n",
+        "    for idx, row in enumerate(training_data, start=1):\n",
+        "        attributes = row[:-1]\n",
+        "        label = row[-1].strip()\n",
+        "\n",
+        "        if label.lower() == \"yes\":\n",
+        "            for i in range(num_attributes):\n",
+        "                if hypothesis[i] == \"0\":\n",
+        "                    hypothesis[i] = attributes[i]\n",
+        "                elif hypothesis[i] != attributes[i]:\n",
+        "                    hypothesis[i] = \"?\"\n",
+        "            print(f\"Instance {idx} (Positive): {attributes} -> h{idx} = {hypothesis}\")\n",
+        "        else:\n",
+        "            print(f\"Instance {idx} (Negative): {attributes} -> Ignored, h{idx} = {hypothesis}\")\n",
+        "\n",
+        "    return hypothesis\n",
+        "\n",
+        "\n",
+        "# Sample EnjoySport Dataset\n",
+        "dataset = [\n",
+        "    [\"Sunny\", \"Warm\", \"Normal\", \"Strong\", \"Warm\", \"Same\", \"Yes\"],\n",
+        "    [\"Sunny\", \"Warm\", \"High\", \"Strong\", \"Warm\", \"Same\", \"Yes\"],\n",
+        "    [\"Rainy\", \"Cold\", \"High\", \"Strong\", \"Warm\", \"Change\", \"No\"],\n",
+        "    [\"Sunny\", \"Warm\", \"High\", \"Strong\", \"Cool\", \"Change\", \"Yes\"],\n",
+        "]\n",
+        "\n",
+        "final_hypothesis = find_s(dataset)\n",
+        "print(\"\\nMost Specific Hypothesis:\")\n",
+        "print(final_hypothesis)"
+      ]
+    }
+  ]
+}
