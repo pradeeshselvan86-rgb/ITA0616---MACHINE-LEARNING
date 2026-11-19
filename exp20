@@ -1,0 +1,280 @@
+import numpy as np
+import pandas as pd
+from sklearn.compose import ColumnTransformer
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.impute import SimpleImputer
+from sklearn.linear_model import Ridge
+from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
+
+
+def create_sample_sales_dataset(n_days=240, start_date="2025-01-01", seed=42):
+    """
+    Generate a daily multi-category retail sales dataset with trend, weekly seasonality,
+    promotions, price changes, and target 'Sales'.
+    """
+    rng = np.random.default_rng(seed)
+    dates = pd.date_range(start=start_date, periods=n_days, freq="D")
+    categories = ["Electronics", "Groceries", "Apparel"]
+
+    rows = []
+    for cat_idx, cat in enumerate(categories):
+        base_demand = [220.0, 310.0, 165.0][cat_idx]
+        unit_price_base = [45.0, 12.0, 28.0][cat_idx]
+
+        for t, dt in enumerate(dates):
+            dow = dt.dayofweek  # 0=Mon .. 6=Sun
+            is_weekend = 1 if dow >= 5 else 0
+            promo = 1 if rng.random() < 0.18 else 0
+            price = round(
+                unit_price_base * (0.85 if promo else rng.uniform(0.95, 1.06)),
+                2,
+            )
+
+            trend = 0.25 * t
+            weekly_wave = 35.0 * np.sin(2.0 * np.pi * dow / 7.0) + (45.0 if is_weekend else 0.0)
+            annual_wave = 20.0 * np.sin(2.0 * np.pi * dt.dayofyear / 365.25)
+            promo_lift = 75.0 * promo
+            price_effect = -1.2 * (price - unit_price_base)
+            noise = rng.normal(0.0, 18.0)
+
+            sales = max(
+                10.0,
+                base_demand + trend + weekly_wave + annual_wave + promo_lift + price_effect + noise,
+            )
+            rows.append({
+                "Date": dt,
+                "Category": cat,
+                "Unit_Price": price,
+                "Promotion": promo,
+                "Day_of_Week": dow,
+                "Month": dt.month,
+                "Is_Weekend": is_weekend,
+                "Sales": round(sales, 2),
+            })
+
+    df = pd.DataFrame(rows).sort_values(["Category", "Date"]).reset_index(drop=True)
+    return df
+
+
+def build_time_series_features(df):
+    """Add calendar, lag, and rolling features per Category without future leakage."""
+    out = df.copy().sort_values(["Category", "Date"]).reset_index(drop=True)
+    out["Date"] = pd.to_datetime(out["Date"])
+
+    out["Day_of_Week"] = out["Date"].dt.dayofweek
+    out["Month"] = out["Date"].dt.month
+    out["Is_Weekend"] = (out["Day_of_Week"] >= 5).astype(int)
+
+    grouped_sales = out.groupby("Category")["Sales"]
+    out["Sales_Lag_1"] = grouped_sales.shift(1)
+    out["Sales_Lag_7"] = grouped_sales.shift(7)
+    out["Sales_Roll7_Mean"] = grouped_sales.transform(
+        lambda s: s.shift(1).rolling(window=7, min_periods=1).mean()
+    )
+    out["Sales_Roll14_Mean"] = grouped_sales.transform(
+        lambda s: s.shift(1).rolling(window=14, min_periods=1).mean()
+    )
+
+    # Drop initial rows lacking Lag_1 so training/test rows have valid prior history
+    out = out.dropna(subset=["Sales_Lag_1"]).reset_index(drop=True)
+    return out
+
+
+def evaluate_forecast(name, y_true, y_pred):
+    mae = mean_absolute_error(y_true, y_pred)
+    rmse = float(np.sqrt(mean_squared_error(y_true, y_pred)))
+    r2 = r2_score(y_true, y_pred)
+    mape = float(np.mean(np.abs((y_true - y_pred) / np.clip(np.abs(y_true), 1e-8, None))) * 100.0)
+    print(f"=== {name} ===")
+    print(f"  MAE : {mae:.2f}")
+    print(f"  RMSE: {rmse:.2f}")
+    print(f"  MAPE: {mape:.2f}%")
+    print(f"  R^2 : {r2:.4f}\n")
+    return {"MAE": mae, "RMSE": rmse, "MAPE": mape, "R2": r2}
+
+
+def forecast_future_days(model, history_df, n_future_days=7, promo_prob=0.20, seed=123):
+    """
+    Iteratively forecast `n_future_days` ahead per category, updating lag and rolling
+    sales features from predicted values.
+    """
+    rng = np.random.default_rng(seed)
+    working = history_df.copy().sort_values(["Category", "Date"]).reset_index(drop=True)
+    working["Date"] = pd.to_datetime(working["Date"])
+
+    feature_cols = [
+        "Category",
+        "Unit_Price",
+        "Promotion",
+        "Day_of_Week",
+        "Month",
+        "Is_Weekend",
+        "Sales_Lag_1",
+        "Sales_Lag_7",
+        "Sales_Roll7_Mean",
+        "Sales_Roll14_Mean",
+    ]
+
+    future_records = []
+    for cat, cat_df in working.groupby("Category"):
+        cat_history = cat_df.sort_values("Date").copy()
+        last_date = cat_history["Date"].iloc[-1]
+        base_price = float(cat_history["Unit_Price"].tail(14).mean())
+        sales_series = list(cat_history["Sales"].astype(float))
+
+        for step in range(1, n_future_days + 1):
+            next_date = last_date + pd.Timedelta(days=step)
+            promo = 1 if rng.random() < promo_prob else 0
+            unit_price = round(base_price * (0.85 if promo else 1.0), 2)
+            dow = next_date.dayofweek
+            month = next_date.month
+            is_weekend = 1 if dow >= 5 else 0
+
+            lag_1 = sales_series[-1]
+            lag_7 = sales_series[-7] if len(sales_series) >= 7 else sales_series[0]
+            roll_7 = float(np.mean(sales_series[-7:]))
+            roll_14 = float(np.mean(sales_series[-14:]))
+
+            row_df = pd.DataFrame([{
+                "Category": cat,
+                "Unit_Price": unit_price,
+                "Promotion": promo,
+                "Day_of_Week": dow,
+                "Month": month,
+                "Is_Weekend": is_weekend,
+                "Sales_Lag_1": lag_1,
+                "Sales_Lag_7": lag_7,
+                "Sales_Roll7_Mean": roll_7,
+                "Sales_Roll14_Mean": roll_14,
+            }])[feature_cols]
+
+            pred_sales = float(model.predict(row_df)[0])
+            sales_series.append(pred_sales)
+
+            future_records.append({
+                "Date": next_date.strftime("%Y-%m-%d"),
+                "Category": cat,
+                "Promotion": promo,
+                "Unit_Price": unit_price,
+                "Predicted_Sales": round(pred_sales, 2),
+            })
+
+    return pd.DataFrame(future_records)
+
+
+if __name__ == "__main__":
+    # To load your own CSV file instead, replace the next line with:
+    # raw_df = pd.read_csv("sales_data.csv")
+    raw_df = create_sample_sales_dataset(n_days=240, start_date="2025-01-01", seed=42)
+    df = build_time_series_features(raw_df)
+
+    feature_cols = [
+        "Category",
+        "Unit_Price",
+        "Promotion",
+        "Day_of_Week",
+        "Month",
+        "Is_Weekend",
+        "Sales_Lag_1",
+        "Sales_Lag_7",
+        "Sales_Roll7_Mean",
+        "Sales_Roll14_Mean",
+    ]
+    target_col = "Sales"
+
+    # Chronological split: last 20% of dates as test set
+    unique_dates = np.sort(df["Date"].unique())
+    cutoff_idx = int(0.80 * len(unique_dates))
+    cutoff_date = unique_dates[cutoff_idx]
+
+    train_df = df[df["Date"] < cutoff_date].copy()
+    test_df = df[df["Date"] >= cutoff_date].copy()
+
+    X_train, y_train = train_df[feature_cols], train_df[target_col]
+    X_test, y_test = test_df[feature_cols], test_df[target_col]
+
+    num_cols = [c for c in feature_cols if c != "Category"]
+    cat_cols = ["Category"]
+
+    preprocessor = ColumnTransformer(transformers=[
+        ("num", Pipeline([
+            ("imputer", SimpleImputer(strategy="median")),
+            ("scaler", StandardScaler()),
+        ]), num_cols),
+        ("cat", Pipeline([
+            ("imputer", SimpleImputer(strategy="most_frequent")),
+            ("onehot", OneHotEncoder(handle_unknown="ignore")),
+        ]), cat_cols),
+    ])
+
+    models = {
+        "Ridge Regression": Ridge(alpha=1.0),
+        "Random Forest Regressor": RandomForestRegressor(
+            n_estimators=250, max_depth=12, min_samples_leaf=3, random_state=42, n_jobs=-1
+        ),
+    }
+
+    best_model = None
+    best_rmse = np.inf
+
+    for name, reg in models.items():
+        pipe = Pipeline([
+            ("preprocessor", preprocessor),
+            ("regressor", reg),
+        ])
+        pipe.fit(X_train, y_train)
+        preds = pipe.predict(X_test)
+        metrics = evaluate_forecast(name, y_test, preds)
+
+        if metrics["RMSE"] < best_rmse:
+            best_rmse = metrics["RMSE"]
+            best_model = pipe
+
+    # Forecast next 7 days beyond the dataset end date
+    future_forecast = forecast_future_days(best_model, raw_df, n_future_days=7, seed=123)
+    print("=== Next 7-Day Future Sales Forecast ===")
+    print(future_forecast.to_string(index=False))
+
+
+
+
+    output :
+
+
+    === Ridge Regression ===
+  MAE : 16.05
+  RMSE: 20.43
+  MAPE: 6.46%
+  R^2 : 0.9182
+
+=== Random Forest Regressor ===
+  MAE : 16.43
+  RMSE: 21.00
+  MAPE: 6.62%
+  R^2 : 0.9136
+
+=== Next 7-Day Future Sales Forecast ===
+      Date    Category  Promotion  Unit_Price  Predicted_Sales
+2025-08-28     Apparel          0       26.86           212.22
+2025-08-29     Apparel          0       26.86           208.16
+2025-08-30     Apparel          0       26.86           258.59
+2025-08-31     Apparel          0       26.86           255.12
+2025-09-01     Apparel          0       26.86           222.27
+2025-09-02     Apparel          0       26.86           213.84
+2025-09-03     Apparel          1       22.83           284.71
+2025-08-28 Electronics          0       44.38           268.25
+2025-08-29 Electronics          0       44.38           267.97
+2025-08-30 Electronics          0       44.38           322.17
+2025-08-31 Electronics          0       44.38           318.21
+2025-09-01 Electronics          0       44.38           280.13
+2025-09-02 Electronics          0       44.38           268.59
+2025-09-03 Electronics          0       44.38           273.32
+2025-08-28   Groceries          0       11.98           363.26
+2025-08-29   Groceries          0       11.98           364.86
+2025-08-30   Groceries          0       11.98           420.14
+2025-08-31   Groceries          0       11.98           418.42
+2025-09-01   Groceries          0       11.98           370.11
+2025-09-02   Groceries          0       11.98           367.35
+2025-09-03   Groceries          0       11.98           370.66
