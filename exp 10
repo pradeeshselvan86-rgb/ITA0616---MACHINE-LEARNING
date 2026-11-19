@@ -1,0 +1,150 @@
+import numpy as np
+
+
+def gaussian_pdf_1d(x, mean, var):
+    """Evaluate 1D Gaussian PDF for array `x` of shape (N,)."""
+    var = max(float(var), 1e-9)
+    coeff = 1.0 / np.sqrt(2.0 * np.pi * var)
+    exponent = -0.5 * ((x - mean) ** 2) / var
+    return coeff * np.exp(exponent)
+
+
+class EMGaussianMixture1D:
+    """Expectation-Maximization for a 1D Gaussian Mixture Model."""
+
+    def __init__(self, n_components=2, max_iter=200, tol=1e-6, reg_covar=1e-6, seed=42):
+        self.k = n_components
+        self.max_iter = max_iter
+        self.tol = tol
+        self.reg_covar = reg_covar
+        self.seed = seed
+
+        self.weights = None   # shape (K,)
+        self.means = None     # shape (K,)
+        self.variances = None # shape (K,)
+        self.log_likelihood_history = []
+
+    def _compute_log_likelihood(self, x):
+        # densities shape: (N, K)
+        weighted_densities = np.column_stack([
+            self.weights[c] * gaussian_pdf_1d(x, self.means[c], self.variances[c])
+            for c in range(self.k)
+        ])
+        total_density = np.sum(weighted_densities, axis=1)
+        total_density = np.clip(total_density, 1e-300, None)
+        return float(np.sum(np.log(total_density)))
+
+    def fit(self, X):
+        x = np.asarray(X, dtype=float).ravel()
+        n = len(x)
+        rng = np.random.default_rng(self.seed)
+
+        # Initialize mixing weights uniformly, means from data quantiles, variances from data variance
+        self.weights = np.full(self.k, 1.0 / self.k, dtype=float)
+        quantiles = np.linspace(0.1, 0.9, self.k)
+        self.means = np.quantile(x, quantiles) + rng.normal(0.0, 0.1 * np.std(x), size=self.k)
+        data_var = float(np.var(x)) if np.var(x) > 0 else 1.0
+        self.variances = np.full(self.k, data_var, dtype=float)
+
+        self.log_likelihood_history = []
+        prev_ll = -np.inf
+
+        for iteration in range(1, self.max_iter + 1):
+            # --- E-Step: Compute responsibilities gamma[i, k] ---
+            weighted = np.column_stack([
+                self.weights[c] * gaussian_pdf_1d(x, self.means[c], self.variances[c])
+                for c in range(self.k)
+            ])
+            row_sums = np.sum(weighted, axis=1, keepdims=True)
+            row_sums = np.where(row_sums == 0.0, 1e-300, row_sums)
+            responsibilities = weighted / row_sums  # shape (N, K)
+
+            # --- M-Step: Update weights, means, and variances ---
+            nk = np.sum(responsibilities, axis=0)  # shape (K,)
+            for c in range(self.k):
+                if nk[c] > 1e-12:
+                    self.weights[c] = nk[c] / n
+                    new_mean = np.sum(responsibilities[:, c] * x) / nk[c]
+                    new_var = np.sum(responsibilities[:, c] * ((x - new_mean) ** 2)) / nk[c]
+                    self.means[c] = new_mean
+                    self.variances[c] = max(new_var, self.reg_covar)
+                else:
+                    self.weights[c] = 1e-12
+                    self.variances[c] = self.reg_covar
+
+            self.weights /= np.sum(self.weights)
+
+            # Check log-likelihood convergence
+            ll = self._compute_log_likelihood(x)
+            self.log_likelihood_history.append(ll)
+            if abs(ll - prev_ll) < self.tol:
+                print(f"Converged at iteration {iteration} (Log-Likelihood: {ll:.6f})")
+                break
+            prev_ll = ll
+        else:
+            print(f"Reached max_iter={self.max_iter} (Final Log-Likelihood: {prev_ll:.6f})")
+
+        return self
+
+    def predict_proba(self, X):
+        x = np.asarray(X, dtype=float).ravel()
+        weighted = np.column_stack([
+            self.weights[c] * gaussian_pdf_1d(x, self.means[c], self.variances[c])
+            for c in range(self.k)
+        ])
+        row_sums = np.sum(weighted, axis=1, keepdims=True)
+        row_sums = np.where(row_sums == 0.0, 1e-300, row_sums)
+        return weighted / row_sums
+
+    def predict(self, X):
+        return np.argmax(self.predict_proba(X), axis=1)
+
+
+if __name__ == "__main__":
+    # Generate synthetic 1D data from two overlapping Gaussian distributions
+    rng = np.random.default_rng(42)
+    comp1 = rng.normal(loc=2.0, scale=0.8, size=150)
+    comp2 = rng.normal(loc=7.5, scale=1.2, size=150)
+    data = np.concatenate([comp1, comp2])
+    rng.shuffle(data)
+
+    em = EMGaussianMixture1D(n_components=2, max_iter=200, tol=1e-7, seed=42)
+    em.fit(data)
+
+    # Sort estimated components by mean for clean display
+    order = np.argsort(em.means)
+    print("\nEstimated GMM Parameters (sorted by mean):")
+    for rank, idx in enumerate(order, start=1):
+        print(
+            f"  Component {rank}: weight (pi) = {em.weights[idx]:.4f}, "
+            f"mean (mu) = {em.means[idx]:.4f}, std (sigma) = {np.sqrt(em.variances[idx]):.4f}"
+        )
+
+    sample_points = np.array([1.8, 4.8, 7.6])
+    probs = em.predict_proba(sample_points)
+    preds = em.predict(sample_points)
+
+    print("\nSample Point Soft Responsibilities & Hard Assignments:")
+    for pt, p_row, pred in zip(sample_points, probs, preds):
+        ordered_probs = p_row[order]
+        ordered_pred = int(np.where(order == pred)[0][0]) + 1
+        print(
+            f"  x = {pt:4.1f} -> P(Comp1)={ordered_probs[0]:.4f}, "
+            f"P(Comp2)={ordered_probs[1]:.4f} | Assigned: Component {ordered_pred}"
+        )
+
+
+
+output : 
+
+
+Converged at iteration 26 (Log-Likelihood: -545.635060)
+
+Estimated GMM Parameters (sorted by mean):
+  Component 1: weight (pi) = 0.4910, mean (mu) = 1.9467, std (sigma) = 0.7795
+  Component 2: weight (pi) = 0.5090, mean (mu) = 7.4547, std (sigma) = 1.1835
+
+Sample Point Soft Responsibilities & Hard Assignments:
+  x =  1.8 -> P(Comp1)=1.0000, P(Comp2)=0.0000 | Assigned: Component 1
+  x =  4.8 -> P(Comp1)=0.2896, P(Comp2)=0.7104 | Assigned: Component 2
+  x =  7.6 -> P(Comp1)=0.0000, P(Comp2)=1.0000 | Assigned: Component 2
