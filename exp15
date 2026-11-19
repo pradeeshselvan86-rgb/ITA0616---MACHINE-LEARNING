@@ -1,30 +1,121 @@
-{
-  "nbformat": 4,
-  "nbformat_minor": 0,
-  "metadata": {
-    "colab": {
-      "provenance": [],
-      "authorship_tag": "ABX9TyPWOtRIgpmy7XbEgtnHP5vi",
-      "include_colab_link": true
-    },
-    "kernelspec": {
-      "name": "python3",
-      "display_name": "Python 3"
-    },
-    "language_info": {
-      "name": "python"
-    }
-  },
-  "cells": [
-    {
-      "cell_type": "markdown",
-      "metadata": {
-        "id": "view-in-github",
-        "colab_type": "text"
-      },
-      "source": [
-        "<a href=\"https://colab.research.google.com/github/pradeeshselvan86-rgb/ITA0616---MACHINE-LEARNING/blob/main/15\" target=\"_parent\"><img src=\"https://colab.research.google.com/assets/colab-badge.svg\" alt=\"Open In Colab\"/></a>"
-      ]
-    }
-  ]
-}
+import pandas as pd
+from sklearn.datasets import load_iris
+from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
+from sklearn.model_selection import train_test_split
+from sklearn.naive_bayes import GaussianNB
+
+
+def main():
+    # 1. Load the Iris dataset
+    iris = load_iris()
+    X = pd.DataFrame(iris.data, columns=iris.feature_names)
+    y = pd.Series(iris.target, name="species_id")
+    target_names = iris.target_names  # ['setosa', 'versicolor', 'virginica']
+
+    print("Dataset Shape:", X.shape)
+    print("Target Classes:", list(target_names))
+    print("\nFirst 5 rows:")
+    preview = X.head().copy()
+    preview["species"] = y.head().map(lambda idx: target_names[idx])
+    print(preview, "\n")
+
+    # 2. Stratified train-test split (80% train, 20% test)
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=0.20, random_state=42, stratify=y
+    )
+
+    # 3. Train Gaussian Naive Bayes classifier
+    model = GaussianNB()
+    model.fit(X_train, y_train)
+
+    # 4. Evaluate on the test set
+    y_pred = model.predict(X_test)
+    acc = accuracy_score(y_test, y_pred)
+
+    print(f"Test Accuracy: {acc * 100:.2f}% ({(y_pred == y_test).sum()}/{len(y_test)} correct)\n")
+
+    print("Confusion Matrix (Rows = Actual, Cols = Predicted):")
+    cm = confusion_matrix(y_test, y_pred)
+    cm_df = pd.DataFrame(cm, index=target_names, columns=target_names)
+    print(cm_df, "\n")
+
+    print("Classification Report:")
+    print(classification_report(y_test, y_pred, target_names=target_names, digits=4))
+
+    # Inspect learned per-class feature means and standard deviations
+    stats_df = pd.DataFrame(
+        model.theta_,
+        columns=[f"{col} (mean)" for col in iris.feature_names],
+        index=target_names,
+    )
+    print("Learned Class Feature Means:")
+    print(stats_df.round(3), "\n")
+
+    # 5. Predict species for new flower samples
+    new_samples = pd.DataFrame(
+        [
+            [5.0, 3.4, 1.5, 0.2],  # Typical setosa
+            [5.9, 2.8, 4.3, 1.3],  # Typical versicolor
+            [6.5, 3.0, 5.5, 2.0],  # Typical virginica
+        ],
+        columns=iris.feature_names,
+    )
+
+    sample_preds = model.predict(new_samples)
+    sample_probs = model.predict_proba(new_samples)
+
+    print("=== New Sample Predictions ===")
+    for idx, row in new_samples.iterrows():
+        pred_species = target_names[sample_preds[idx]]
+        prob_details = ", ".join(
+            f"{name}: {prob:.4f}" for name, prob in zip(target_names, sample_probs[idx])
+        )
+        print(f"Sample {idx + 1} -> Predicted: {pred_species} | {prob_details}")
+
+
+if __name__ == "__main__":
+    main()
+
+output:
+
+
+Dataset Shape: (150, 4)
+Target Classes: ['setosa', 'versicolor', 'virginica']
+
+First 5 rows:
+   sepal length (cm)  sepal width (cm)  petal length (cm)  petal width (cm) species
+0                5.1               3.5                1.4               0.2  setosa
+1                4.9               3.0                1.4               0.2  setosa
+2                4.7               3.2                1.3               0.2  setosa
+3                4.6               3.1                1.5               0.2  setosa
+4                5.0               3.6                1.4               0.2  setosa
+
+Test Accuracy: 96.67% (29/30 correct)
+
+Confusion Matrix (Rows = Actual, Cols = Predicted):
+            setosa  versicolor  virginica
+setosa          10           0          0
+versicolor       0           9          1
+virginica        0           0         10
+
+Classification Report:
+              precision    recall  f1-score   support
+
+      setosa     1.0000    1.0000    1.0000        10
+  versicolor     1.0000    0.9000    0.9474        10
+   virginica     0.9091    1.0000    0.9524        10
+
+    accuracy                         0.9667        30
+   macro avg     0.9697    0.9667    0.9666        30
+weighted avg     0.9697    0.9667    0.9666        30
+
+Learned Class Feature Means:
+            sepal length (cm) (mean)  sepal width (cm) (mean)  petal length (cm) (mean)  petal width (cm) (mean)
+setosa                         4.985                    3.418                     1.468                    0.242
+versicolor                     5.930                    2.750                     4.252                    1.320
+virginica                      6.610                    2.980                     5.580                    2.040
+
+=== New Sample Predictions ===
+Sample 1 -> Predicted: setosa | setosa: 1.0000, versicolor: 0.0000, virginica: 0.0000
+Sample 2 -> Predicted: versicolor | setosa: 0.0000, versicolor: 0.9949, virginica: 0.0051
+Sample 3 -> Predicted: virginica | setosa: 0.0000, versicolor: 0.0014, virginica: 0.9986
