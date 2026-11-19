@@ -1,0 +1,216 @@
+import numpy as np
+import pandas as pd
+from sklearn.compose import ColumnTransformer
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.impute import SimpleImputer
+from sklearn.linear_model import Ridge
+from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+from sklearn.model_selection import train_test_split
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
+
+
+def create_sample_mobile_dataset(n_samples=700, seed=42):
+    """
+    Generate a realistic smartphone pricing dataset with numerical and categorical features
+    and target 'Price' (in currency units, e.g., USD or equivalent scaled price units).
+    """
+    rng = np.random.default_rng(seed)
+
+    ram_gb = rng.choice([4, 6, 8, 12, 16], size=n_samples, p=[0.15, 0.25, 0.32, 0.20, 0.08])
+    storage_gb = rng.choice([64, 128, 256, 512], size=n_samples, p=[0.18, 0.38, 0.32, 0.12])
+    battery_mah = rng.integers(3800, 6501, size=n_samples)
+    screen_size_in = np.round(rng.uniform(5.8, 6.9, size=n_samples), 1)
+    rear_camera_mp = rng.choice([12, 48, 50, 64, 108, 200], size=n_samples, p=[0.10, 0.15, 0.30, 0.20, 0.17, 0.08])
+    front_camera_mp = rng.choice([8, 12, 16, 32], size=n_samples, p=[0.20, 0.25, 0.35, 0.20])
+    refresh_rate_hz = rng.choice([60, 90, 120, 144], size=n_samples, p=[0.22, 0.28, 0.42, 0.08])
+    processor_ghz = np.round(rng.uniform(1.8, 3.4, size=n_samples), 2)
+
+    brand_tier = rng.choice(["Budget", "MidRange", "Flagship"], size=n_samples, p=[0.30, 0.45, 0.25])
+    display_type = rng.choice(["LCD", "OLED", "AMOLED"], size=n_samples, p=[0.25, 0.35, 0.40])
+    supports_5g = rng.choice(["Yes", "No"], size=n_samples, p=[0.72, 0.28])
+
+    brand_bonus = np.where(brand_tier == "Flagship", 320.0, np.where(brand_tier == "MidRange", 95.0, 0.0))
+    display_bonus = np.where(display_type == "AMOLED", 75.0, np.where(display_type == "OLED", 55.0, 0.0))
+    five_g_bonus = np.where(supports_5g == "Yes", 60.0, 0.0)
+
+    # Non-linear pricing structure with flagship/storage/RAM interactions + noise
+    price = (
+        90.0
+        + 26.0 * ram_gb
+        + 0.48 * storage_gb
+        + 0.035 * (battery_mah - 4000)
+        + 22.0 * (screen_size_in - 6.0)
+        + 1.35 * rear_camera_mp
+        + 2.4 * front_camera_mp
+        + 0.85 * (refresh_rate_hz - 60)
+        + 95.0 * (processor_ghz - 2.0)
+        + brand_bonus
+        + display_bonus
+        + five_g_bonus
+        + 2.2 * (ram_gb ** 1.35)
+        + rng.normal(0.0, 35.0, size=n_samples)
+    ).clip(80.0, None)
+
+    df = pd.DataFrame({
+        "RAM_GB": ram_gb,
+        "Storage_GB": storage_gb,
+        "Battery_mAh": battery_mah,
+        "Screen_Size_In": screen_size_in,
+        "Rear_Camera_MP": rear_camera_mp,
+        "Front_Camera_MP": front_camera_mp,
+        "Refresh_Rate_Hz": refresh_rate_hz,
+        "Processor_GHz": processor_ghz,
+        "Brand_Tier": brand_tier,
+        "Display_Type": display_type,
+        "Supports_5G": supports_5g,
+        "Price": np.round(price, 2),
+    })
+    return df
+
+
+def evaluate_regressor(name, y_true, y_pred):
+    mae = mean_absolute_error(y_true, y_pred)
+    rmse = float(np.sqrt(mean_squared_error(y_true, y_pred)))
+    r2 = r2_score(y_true, y_pred)
+    print(f"=== {name} ===")
+    print(f"  MAE : {mae:.2f}")
+    print(f"  RMSE: {rmse:.2f}")
+    print(f"  R^2 : {r2:.4f}\n")
+    return {"MAE": mae, "RMSE": rmse, "R2": r2}
+
+
+if __name__ == "__main__":
+    # To use your own CSV dataset instead, replace the next line with:
+    # df = pd.read_csv("mobile_prices.csv")
+    df = create_sample_mobile_dataset(n_samples=700, seed=42)
+
+    print("Dataset Shape:", df.shape)
+    print(df.head(), "\n")
+
+    target_col = "Price"
+    X = df.drop(columns=[target_col])
+    y = df[target_col]
+
+    numeric_cols = X.select_dtypes(include=["int64", "float64"]).columns.tolist()
+    categorical_cols = X.select_dtypes(include=["object", "category"]).columns.tolist()
+
+    numeric_pipeline = Pipeline(steps=[
+        ("imputer", SimpleImputer(strategy="median")),
+        ("scaler", StandardScaler()),
+    ])
+
+    categorical_pipeline = Pipeline(steps=[
+        ("imputer", SimpleImputer(strategy="most_frequent")),
+        ("onehot", OneHotEncoder(handle_unknown="ignore")),
+    ])
+
+    preprocessor = ColumnTransformer(transformers=[
+        ("num", numeric_pipeline, numeric_cols),
+        ("cat", categorical_pipeline, categorical_cols),
+    ])
+
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=0.20, random_state=42
+    )
+
+    candidates = {
+        "Ridge Regression": Ridge(alpha=1.0),
+        "Random Forest Regressor": RandomForestRegressor(
+            n_estimators=250, max_depth=14, min_samples_leaf=2, random_state=42, n_jobs=-1
+        ),
+    }
+
+    best_model = None
+    best_r2 = -np.inf
+
+    for model_name, regressor in candidates.items():
+        pipe = Pipeline(steps=[
+            ("preprocessor", preprocessor),
+            ("regressor", regressor),
+        ])
+        pipe.fit(X_train, y_train)
+        y_pred = pipe.predict(X_test)
+        metrics = evaluate_regressor(model_name, y_test, y_pred)
+
+        if metrics["R2"] > best_r2:
+            best_r2 = metrics["R2"]
+            best_model = pipe
+
+    # Display top feature importances for Random Forest
+    reg_step = best_model.named_steps["regressor"]
+    if hasattr(reg_step, "feature_importances_"):
+        feat_names = best_model.named_steps["preprocessor"].get_feature_names_out()
+        importances = pd.Series(reg_step.feature_importances_, index=feat_names)
+        print("Top 8 Most Important Features:")
+        print(importances.sort_values(ascending=False).head(8).round(4), "\n")
+
+    # Predict prices for new mobile phone models
+    new_phones = pd.DataFrame([
+        {
+            "RAM_GB": 12,
+            "Storage_GB": 256,
+            "Battery_mAh": 5000,
+            "Screen_Size_In": 6.7,
+            "Rear_Camera_MP": 108,
+            "Front_Camera_MP": 32,
+            "Refresh_Rate_Hz": 120,
+            "Processor_GHz": 3.1,
+            "Brand_Tier": "Flagship",
+            "Display_Type": "AMOLED",
+            "Supports_5G": "Yes",
+        },
+        {
+            "RAM_GB": 6,
+            "Storage_GB": 128,
+            "Battery_mAh": 5000,
+            "Screen_Size_In": 6.5,
+            "Rear_Camera_MP": 50,
+            "Front_Camera_MP": 16,
+            "Refresh_Rate_Hz": 90,
+            "Processor_GHz": 2.2,
+            "Brand_Tier": "MidRange",
+            "Display_Type": "OLED",
+            "Supports_5G": "Yes",
+        },
+    ])
+
+    predicted_prices = best_model.predict(new_phones)
+    print("=== Predicted Mobile Prices for New Models ===")
+    for idx, (row, price) in enumerate(zip(new_phones.to_dict(orient="records"), predicted_prices), start=1):
+        print(
+            f"Phone {idx} ({row['Brand_Tier']}, {row['RAM_GB']}GB RAM / {row['Storage_GB']}GB, "
+            f"{row['Display_Type']}, 5G={row['Supports_5G']}) -> Predicted Price: {price:.2f}"
+        )
+
+
+output: 
+
+
+Dataset Shape: (700, 12)
+   RAM_GB  Storage_GB  Battery_mAh  Screen_Size_In  Rear_Camera_MP  Front_Camera_MP  Refresh_Rate_Hz  Processor_GHz Brand_Tier Display_Type Supports_5G   Price
+0       8         128         5720             6.7              50               32               90           2.62   MidRange       AMOLED         Yes  638.94
+1       8         256         4469             6.3              50               32              120           2.89   MidRange         OLED         Yes  693.96
+2      12         256         5559             6.4             108               16              120           2.98   Flagship       AMOLED         Yes  990.51
+3       6         128         6385             6.2             200               12              120           2.71   MidRange         OLED         Yes  709.90
+4       4         256         4093             6.1              50               16               60           2.69   Flagship         OLED          No  653.43
+
+=== Ridge Regression ===
+  MAE : 28.09
+  RMSE: 34.48
+  R^2 : 0.9693
+
+=== Random Forest Regressor ===
+  MAE : 32.02
+  RMSE: 39.77
+  R^2 : 0.9592
+
+Top 8 Most Important Features:
+num__RAM_GB                 0.4153
+cat__Brand_Tier_Flagship    0.3435
+num__Storage_GB             0.0568
+cat__Brand_Tier_MidRange    0.0446
+cat__Brand_Tier_Budget      0.0434
+num__Rear_Camera_MP         0.0252
+num__Processor_GHz          0.0209
+num__Refresh_Rate_Hz        0.0110
