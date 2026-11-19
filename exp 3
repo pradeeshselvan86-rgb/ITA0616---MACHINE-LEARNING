@@ -1,0 +1,182 @@
+import math
+from collections import Counter
+
+
+def entropy(rows):
+    """Compute Shannon entropy of class labels in the last column of `rows`."""
+    total = len(rows)
+    if total == 0:
+        return 0.0
+    counts = Counter(row[-1] for row in rows)
+    ent = 0.0
+    for count in counts.values():
+        p = count / total
+        if p > 0:
+            ent -= p * math.log2(p)
+    return ent
+
+
+def information_gain(rows, attr_idx):
+    """Compute Information Gain for splitting `rows` on attribute index `attr_idx`."""
+    base_entropy = entropy(rows)
+    total = len(rows)
+    partitions = {}
+    for row in rows:
+        key = row[attr_idx]
+        partitions.setdefault(key, []).append(row)
+
+    weighted_entropy = 0.0
+    for subset in partitions.values():
+        weighted_entropy += (len(subset) / total) * entropy(subset)
+
+    return base_entropy - weighted_entropy
+
+
+def majority_class(rows):
+    """Return the most frequent class label in `rows`."""
+    counts = Counter(row[-1] for row in rows)
+    return counts.most_common(1)[0][0]
+
+
+def id3(rows, attr_names, available_indices):
+    """Recursively build the ID3 decision tree."""
+    labels = [row[-1] for row in rows]
+
+    # Base case 1: all examples have the same class
+    if len(set(labels)) == 1:
+        return labels[0]
+
+    # Base case 2: no attributes left to split on
+    if not available_indices:
+        return majority_class(rows)
+
+    # Choose attribute with highest information gain
+    best_idx = max(available_indices, key=lambda idx: information_gain(rows, idx))
+    best_gain = information_gain(rows, best_idx)
+
+    # If no positive information gain, return majority class
+    if best_gain <= 0:
+        return majority_class(rows)
+
+    attr_name = attr_names[best_idx]
+    tree = {attr_name: {}}
+
+    # Partition rows by each value of best_idx
+    values = sorted(set(row[best_idx] for row in rows))
+    remaining_indices = [i for i in available_indices if i != best_idx]
+
+    for val in values:
+        subset = [row for row in rows if row[best_idx] == val]
+        if not subset:
+            tree[attr_name][val] = majority_class(rows)
+        else:
+            tree[attr_name][val] = id3(subset, attr_names, remaining_indices)
+
+    return tree
+
+
+def print_tree(node, indent=""):
+    """Pretty-print the learned decision tree."""
+    if not isinstance(node, dict):
+        print(f"{indent}└── Predict: {node}")
+        return
+
+    for attr, branches in node.items():
+        print(f"{indent}{attr}")
+        for idx, (val, subtree) in enumerate(branches.items()):
+            is_last = idx == len(branches) - 1
+            connector = "└── " if is_last else "├── "
+            next_indent = indent + ("    " if is_last else "│   ")
+            if isinstance(subtree, dict):
+                print(f"{indent}{connector}{val}")
+                print_tree(subtree, next_indent)
+            else:
+                print(f"{indent}{connector}{val} -> {subtree}")
+
+
+def classify(tree, attr_names, sample):
+    """Classify a single sample dictionary or list using the learned tree."""
+    sample_map = (
+        sample if isinstance(sample, dict) else dict(zip(attr_names, sample))
+    )
+    current = tree
+    while isinstance(current, dict):
+        attr = next(iter(current))
+        val = sample_map.get(attr)
+        if val not in current[attr]:
+            # Fallback if unseen attribute value at this branch
+            sub_preds = [
+                classify(sub, attr_names, sample_map)
+                for sub in current[attr].values()
+            ]
+            return Counter(sub_preds).most_common(1)[0][0]
+        current = current[attr][val]
+    return current
+
+
+if __name__ == "__main__":
+    headers = ["Outlook", "Temperature", "Humidity", "Wind", "Play"]
+    training_rows = [
+        ["Sunny", "Hot", "High", "Weak", "No"],
+        ["Sunny", "Hot", "High", "Strong", "No"],
+        ["Overcast", "Hot", "High", "Weak", "Yes"],
+        ["Rain", "Mild", "High", "Weak", "Yes"],
+        ["Rain", "Cool", "Normal", "Weak", "Yes"],
+        ["Rain", "Cool", "Normal", "Strong", "No"],
+        ["Overcast", "Cool", "Normal", "Strong", "Yes"],
+        ["Sunny", "Mild", "High", "Weak", "No"],
+        ["Sunny", "Cool", "Normal", "Weak", "Yes"],
+        ["Rain", "Mild", "Normal", "Weak", "Yes"],
+        ["Sunny", "Mild", "Normal", "Strong", "Yes"],
+        ["Overcast", "Mild", "High", "Strong", "Yes"],
+        ["Overcast", "Hot", "Normal", "Weak", "Yes"],
+        ["Rain", "Mild", "High", "Strong", "No"],
+    ]
+
+    attr_names = headers[:-1]
+    feature_indices = list(range(len(attr_names)))
+
+    print(f"Root Entropy: {entropy(training_rows):.4f}")
+    for idx, name in enumerate(attr_names):
+        print(f"Information Gain ({name}): {information_gain(training_rows, idx):.4f}")
+
+    decision_tree = id3(training_rows, attr_names, feature_indices)
+    print("\nLearned Decision Tree:")
+    print_tree(decision_tree)
+
+    new_sample = {
+        "Outlook": "Sunny",
+        "Temperature": "Cool",
+        "Humidity": "Normal",
+        "Wind": "Strong",
+    }
+    prediction = classify(decision_tree, attr_names, new_sample)
+    print(f"\nNew Sample: {new_sample}")
+    print(f"Predicted Class: {prediction}")
+
+
+
+    output : 
+
+
+
+    Root Entropy: 0.9403
+Information Gain (Outlook): 0.2467
+Information Gain (Temperature): 0.0292
+Information Gain (Humidity): 0.1518
+Information Gain (Wind): 0.0481
+
+Learned Decision Tree:
+Outlook
+├── Overcast -> Yes
+├── Rain
+│   └── Wind
+│       ├── Strong -> No
+│       └── Weak -> Yes
+└── Sunny
+    └── Humidity
+        ├── High -> No
+        └── Normal -> Yes
+
+New Sample: {'Outlook': 'Sunny', 'Temperature': 'Cool', 'Humidity': 'Normal', 'Wind': 'Strong'}
+Predicted Class: Yes
