@@ -1,30 +1,267 @@
-{
-  "nbformat": 4,
-  "nbformat_minor": 0,
-  "metadata": {
-    "colab": {
-      "provenance": [],
-      "authorship_tag": "ABX9TyPWOtRIgpmy7XbEgtnHP5vi",
-      "include_colab_link": true
-    },
-    "kernelspec": {
-      "name": "python3",
-      "display_name": "Python 3"
-    },
-    "language_info": {
-      "name": "python"
-    }
-  },
-  "cells": [
-    {
-      "cell_type": "markdown",
-      "metadata": {
-        "id": "view-in-github",
-        "colab_type": "text"
-      },
-      "source": [
-        "<a href=\"https://colab.research.google.com/github/pradeeshselvan86-rgb/ITA0616---MACHINE-LEARNING/blob/main/exp%202\" target=\"_parent\"><img src=\"https://colab.research.google.com/assets/colab-badge.svg\" alt=\"Open In Colab\"/></a>"
-      ]
-    }
-  ]
-}
+import csv
+import os
+
+
+def is_more_general_or_equal(h_general, h_specific):
+    """Return True if h_general covers every instance covered by h_specific."""
+    for g_val, s_val in zip(h_general, h_specific):
+        if g_val == "?":
+            continue
+        if s_val == "0":
+            return False
+        if g_val != s_val:
+            return False
+    return True
+
+
+def matches(hypothesis, instance):
+    """Return True if hypothesis matches/covers the given attribute instance."""
+    for h_val, x_val in zip(hypothesis, instance):
+        if h_val != "?" and h_val != x_val:
+            return False
+    return True
+
+
+def generalize_hypothesis(hypothesis, instance):
+    """Minimally generalize a single hypothesis so it covers instance."""
+    new_h = []
+    for h_val, x_val in zip(hypothesis, instance):
+        if h_val == "0":
+            new_h.append(x_val)
+        elif h_val == x_val:
+            new_h.append(h_val)
+        else:
+            new_h.append("?")
+    return new_h
+
+
+def specialize_hypothesis(hypothesis, instance, domains):
+    """
+    Generate minimal specializations of `hypothesis` that exclude `instance`,
+    using values from each attribute's domain.
+    """
+    specializations = []
+    for idx, h_val in enumerate(hypothesis):
+        if h_val == "?":
+            for val in sorted(domains[idx]):
+                if val != instance[idx]:
+                    spec = hypothesis.copy()
+                    spec[idx] = val
+                    specializations.append(spec)
+    return specializations
+
+
+def prune_general_boundary(G, S):
+    """
+    Keep hypotheses in G that are consistent with at least one hypothesis in S,
+    and remove any hypothesis in G that is more specific than another in G.
+    """
+    valid_G = [
+        g for g in G if any(is_more_general_or_equal(g, s) for s in S)
+    ]
+
+    # Deduplicate while preserving order
+    unique_G = []
+    for g in valid_G:
+        if g not in unique_G:
+            unique_G.append(g)
+
+    # Remove any g1 if there exists another g2 in unique_G such that g2 is more general than g1
+    pruned_G = []
+    for i, g1 in enumerate(unique_G):
+        redundant = any(
+            j != i and is_more_general_or_equal(g2, g1) and g2 != g1
+            for j, g2 in enumerate(unique_G)
+        )
+        if not redundant:
+            pruned_G.append(g1)
+
+    return pruned_G
+
+
+def prune_specific_boundary(S, G):
+    """
+    Keep hypotheses in S that are more specific than (or equal to) at least one in G,
+    and remove any hypothesis in S that is more general than another in S.
+    """
+    valid_S = [
+        s for s in S if any(is_more_general_or_equal(g, s) for g in G)
+    ]
+
+    unique_S = []
+    for s in valid_S:
+        if s not in unique_S:
+            unique_S.append(s)
+
+    # Remove any s1 if there exists s2 in unique_S such that s1 is more general than s2
+    pruned_S = []
+    for i, s1 in enumerate(unique_S):
+        over_general = any(
+            j != i and is_more_general_or_equal(s1, s2) and s1 != s2
+            for j, s2 in enumerate(unique_S)
+        )
+        if not over_general:
+            pruned_S.append(s1)
+
+    return pruned_S
+
+
+def candidate_elimination(csv_path):
+    with open(csv_path, mode="r", newline="", encoding="utf-8") as f:
+        reader = csv.reader(f)
+        rows = [row for row in reader if row]
+
+    headers = rows[0]
+    attr_names = headers[:-1]
+    data = rows[1:]
+    num_attrs = len(attr_names)
+
+    # Collect possible values per attribute from the dataset
+    domains = [set() for _ in range(num_attrs)]
+    for row in data:
+        for i in range(num_attrs):
+            domains[i].add(row[i].strip())
+
+    # Initialize S (most specific) and G (most general)
+    S = [["0"] * num_attrs]
+    G = [["?"] * num_attrs]
+
+    print("Attributes:", attr_names)
+    print(f"Initial S0: {S}")
+    print(f"Initial G0: {G}\n")
+
+    for step, row in enumerate(data, start=1):
+        instance = [val.strip() for val in row[:-1]]
+        label = row[-1].strip().lower()
+
+        if label in ("yes", "true", "1", "positive"):
+            print(f"--- Step {step}: Positive Example {instance} ---")
+            # 1. Remove hypotheses from G inconsistent with positive example
+            G = [g for g in G if matches(g, instance)]
+
+            # 2. Generalize hypotheses in S inconsistent with positive example
+            new_S = []
+            for s in S:
+                if matches(s, instance):
+                    new_S.append(s)
+                else:
+                    gen_s = generalize_hypothesis(s, instance)
+                    if any(is_more_general_or_equal(g, gen_s) for g in G):
+                        new_S.append(gen_s)
+
+            S = prune_specific_boundary(new_S, G)
+            G = prune_general_boundary(G, S)
+
+        elif label in ("no", "false", "0", "negative"):
+            print(f"--- Step {step}: Negative Example {instance} ---")
+            # 1. Remove hypotheses from S consistent with negative example
+            S = [s for s in S if not matches(s, instance)]
+
+            # 2. Specialize hypotheses in G consistent with negative example
+            new_G = []
+            for g in G:
+                if not matches(g, instance):
+                    new_G.append(g)
+                else:
+                    specs = specialize_hypothesis(g, instance, domains)
+                    for spec in specs:
+                        if any(is_more_general_or_equal(spec, s) for s in S):
+                            new_G.append(spec)
+
+            G = prune_general_boundary(new_G, S)
+            S = prune_specific_boundary(S, G)
+        else:
+            raise ValueError(f"Unrecognized label '{row[-1]}' in row {step}")
+
+        print(f"S{step}: {S}")
+        print(f"G{step}: {G}\n")
+
+    return attr_names, S, G, domains
+
+
+def enumerate_version_space(S, G, domains):
+    """
+    Enumerate all distinct hypotheses h such that s <=_g h <=_g g
+    for some s in S and g in G (for modest attribute spaces).
+    """
+    candidates = set()
+    num_attrs = len(domains)
+
+    # Generate hypotheses by picking values allowed by G and S boundaries
+    def backtrack(idx, current):
+        if idx == num_attrs:
+            h = tuple(current)
+            if any(is_more_general_or_equal(s, list(h)) for s in S) and any(
+                is_more_general_or_equal(list(h), g) for g in G
+            ):
+                candidates.add(h)
+            return
+
+        possible_vals = {"?"} | domains[idx]
+        for val in possible_vals:
+            current.append(val)
+            backtrack(idx + 1, current)
+            current.pop()
+
+    backtrack(0, [])
+    return sorted([list(h) for h in candidates])
+
+
+if __name__ == "__main__":
+    sample_csv = "training_data.csv"
+
+    # Create sample CSV if it doesn't already exist
+    if not os.path.exists(sample_csv):
+        with open(sample_csv, mode="w", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            writer.writerow(["Sky", "AirTemp", "Humidity", "Wind", "Water", "Forecast", "EnjoySport"])
+            writer.writerow(["Sunny", "Warm", "Normal", "Strong", "Warm", "Same", "Yes"])
+            writer.writerow(["Sunny", "Warm", "High", "Strong", "Warm", "Same", "Yes"])
+            writer.writerow(["Rainy", "Cold", "High", "Strong", "Warm", "Change", "No"])
+            writer.writerow(["Sunny", "Warm", "High", "Strong", "Cool", "Change", "Yes"])
+
+    attrs, final_S, final_G, attr_domains = candidate_elimination(sample_csv)
+    version_space = enumerate_version_space(final_S, final_G, attr_domains)
+
+    print("==========================================")
+    print("Final Specific Boundary (S):", final_S)
+    print("Final General Boundary (G):", final_G)
+    print(f"Total Consistent Hypotheses in Version Space: {len(version_space)}")
+    for h in version_space:
+        print("  ", h)
+    print("==========================================")
+
+
+Expected Output :
+
+Attributes: ['Sky', 'AirTemp', 'Humidity', 'Wind', 'Water', 'Forecast']
+Initial S0: [['0', '0', '0', '0', '0', '0']]
+Initial G0: [['?', '?', '?', '?', '?', '?']]
+
+--- Step 1: Positive Example ['Sunny', 'Warm', 'Normal', 'Strong', 'Warm', 'Same'] ---
+S1: [['Sunny', 'Warm', 'Normal', 'Strong', 'Warm', 'Same']]
+G1: [['?', '?', '?', '?', '?', '?']]
+
+--- Step 2: Positive Example ['Sunny', 'Warm', 'High', 'Strong', 'Warm', 'Same'] ---
+S2: [['Sunny', 'Warm', '?', 'Strong', 'Warm', 'Same']]
+G2: [['?', '?', '?', '?', '?', '?']]
+
+--- Step 3: Negative Example ['Rainy', 'Cold', 'High', 'Strong', 'Warm', 'Change'] ---
+S3: [['Sunny', 'Warm', '?', 'Strong', 'Warm', 'Same']]
+G3: [['Sunny', '?', '?', '?', '?', '?'], ['?', 'Warm', '?', '?', '?', '?']]
+
+--- Step 4: Positive Example ['Sunny', 'Warm', 'High', 'Strong', 'Cool', 'Change'] ---
+S4: [['Sunny', 'Warm', '?', 'Strong', '?', '?']]
+G4: [['Sunny', '?', '?', '?', '?', '?'], ['?', 'Warm', '?', '?', '?', '?']]
+
+==========================================
+Final Specific Boundary (S): [['Sunny', 'Warm', '?', 'Strong', '?', '?']]
+Final General Boundary (G): [['Sunny', '?', '?', '?', '?', '?'], ['?', 'Warm', '?', '?', '?', '?']]
+Total Consistent Hypotheses in Version Space: 6
+   ['Sunny', 'Warm', '?', 'Strong', '?', '?']
+   ['Sunny', 'Warm', '?', '?', '?', '?']
+   ['Sunny', 'Warm', '?', 'Strong', '?', 'Same']
+   ['Sunny', 'Warm', '?', 'Strong', 'Warm', '?']
+   ['Sunny', '?', '?', '?', '?', '?']
+   ['?', 'Warm', '?', '?', '?', '?']
+==========================================
