@@ -1,30 +1,206 @@
-{
-  "nbformat": 4,
-  "nbformat_minor": 0,
-  "metadata": {
-    "colab": {
-      "provenance": [],
-      "authorship_tag": "ABX9TyPWOtRIgpmy7XbEgtnHP5vi",
-      "include_colab_link": true
-    },
-    "kernelspec": {
-      "name": "python3",
-      "display_name": "Python 3"
-    },
-    "language_info": {
-      "name": "python"
+import numpy as np
+import pandas as pd
+from sklearn.compose import ColumnTransformer
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.impute import SimpleImputer
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
+from sklearn.model_selection import train_test_split
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
+
+
+def create_sample_credit_dataset(n_samples=600, seed=42):
+    """
+    Generate a synthetic multi-class credit score dataset with realistic financial features
+    and target labels: 'Poor', 'Standard', 'Good'.
+    """
+    rng = np.random.default_rng(seed)
+
+    age = rng.integers(21, 68, size=n_samples)
+    annual_income = rng.normal(65000, 28000, size=n_samples).clip(15000, 220000)
+    num_bank_accounts = rng.integers(1, 9, size=n_samples)
+    num_credit_cards = rng.integers(1, 10, size=n_samples)
+    interest_rate = rng.integers(4, 32, size=n_samples)
+    num_of_loans = rng.integers(0, 8, size=n_samples)
+    delay_from_due_date = rng.integers(0, 45, size=n_samples)
+    num_delayed_payments = rng.integers(0, 20, size=n_samples)
+    credit_utilization_ratio = rng.uniform(10.0, 95.0, size=n_samples)
+    credit_history_months = rng.integers(6, 360, size=n_samples)
+    outstanding_debt = rng.uniform(200.0, 4500.0, size=n_samples)
+
+    credit_mix = rng.choice(["Bad", "Standard", "Good"], size=n_samples, p=[0.25, 0.45, 0.30])
+    payment_min_amount = rng.choice(["Yes", "No"], size=n_samples, p=[0.45, 0.55])
+
+    # Latent creditworthiness score with realistic domain relationships + noise
+    mix_bonus = np.where(credit_mix == "Good", 18.0, np.where(credit_mix == "Standard", 5.0, -15.0))
+    min_pay_penalty = np.where(payment_min_amount == "Yes", -10.0, 6.0)
+
+    latent_score = (
+        50.0
+        + (annual_income / 10000.0) * 2.2
+        + (credit_history_months / 12.0) * 1.4
+        - delay_from_due_date * 0.75
+        - num_delayed_payments * 1.1
+        - (outstanding_debt / 500.0) * 2.5
+        - (credit_utilization_ratio / 10.0) * 1.3
+        - interest_rate * 0.45
+        + mix_bonus
+        + min_pay_penalty
+        + rng.normal(0.0, 6.0, size=n_samples)
+    )
+
+    credit_score = np.where(
+        latent_score < 32.0,
+        "Poor",
+        np.where(latent_score < 62.0, "Standard", "Good"),
+    )
+
+    df = pd.DataFrame({
+        "Age": age,
+        "Annual_Income": np.round(annual_income, 2),
+        "Num_Bank_Accounts": num_bank_accounts,
+        "Num_Credit_Card": num_credit_cards,
+        "Interest_Rate": interest_rate,
+        "Num_of_Loan": num_of_loans,
+        "Delay_from_due_date": delay_from_due_date,
+        "Num_of_Delayed_Payment": num_delayed_payments,
+        "Credit_Utilization_Ratio": np.round(credit_utilization_ratio, 2),
+        "Credit_History_Months": credit_history_months,
+        "Outstanding_Debt": np.round(outstanding_debt, 2),
+        "Credit_Mix": credit_mix,
+        "Payment_of_Min_Amount": payment_min_amount,
+        "Credit_Score": credit_score,
+    })
+    return df
+
+
+if __name__ == "__main__":
+    # To use your own CSV file instead, replace the next line with:
+    # df = pd.read_csv("credit_score.csv")
+    df = create_sample_credit_dataset(n_samples=600, seed=42)
+
+    print("Dataset Shape:", df.shape)
+    print("Class Distribution:\n", df["Credit_Score"].value_counts(), "\n")
+
+    X = df.drop(columns=["Credit_Score"])
+    y = df["Credit_Score"]
+
+    numeric_features = X.select_dtypes(include=["int64", "float64"]).columns.tolist()
+    categorical_features = X.select_dtypes(include=["object", "category"]).columns.tolist()
+
+    # Preprocessing pipeline
+    numeric_transformer = Pipeline(steps=[
+        ("imputer", SimpleImputer(strategy="median")),
+        ("scaler", StandardScaler()),
+    ])
+
+    categorical_transformer = Pipeline(steps=[
+        ("imputer", SimpleImputer(strategy="most_frequent")),
+        ("onehot", OneHotEncoder(handle_unknown="ignore")),
+    ])
+
+    preprocessor = ColumnTransformer(transformers=[
+        ("num", numeric_transformer, numeric_features),
+        ("cat", categorical_transformer, categorical_features),
+    ])
+
+    # Stratified train-test split (80% train / 20% test)
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=0.20, random_state=42, stratify=y
+    )
+
+    models = {
+        "Logistic Regression": LogisticRegression(max_iter=1000, random_state=42),
+        "Random Forest": RandomForestClassifier(n_estimators=200, random_state=42),
     }
-  },
-  "cells": [
-    {
-      "cell_type": "markdown",
-      "metadata": {
-        "id": "view-in-github",
-        "colab_type": "text"
-      },
-      "source": [
-        "<a href=\"https://colab.research.google.com/github/pradeeshselvan86-rgb/ITA0616---MACHINE-LEARNING/blob/main/exp11\" target=\"_parent\"><img src=\"https://colab.research.google.com/assets/colab-badge.svg\" alt=\"Open In Colab\"/></a>"
-      ]
-    }
-  ]
-}
+
+    labels_order = ["Poor", "Standard", "Good"]
+    best_pipeline = None
+    best_acc = -1.0
+
+    for name, estimator in models.items():
+        clf_pipeline = Pipeline(steps=[
+            ("preprocessor", preprocessor),
+            ("classifier", estimator),
+        ])
+
+        clf_pipeline.fit(X_train, y_train)
+        y_pred = clf_pipeline.predict(X_test)
+        acc = accuracy_score(y_test, y_pred)
+
+        print(f"=== {name} ===")
+        print(f"Test Accuracy: {acc * 100:.2f}%\n")
+        print("Classification Report:")
+        print(classification_report(y_test, y_pred, labels=labels_order, zero_division=0))
+        print("Confusion Matrix (Rows=Actual, Cols=Predicted [Poor, Standard, Good]):")
+        print(confusion_matrix(y_test, y_pred, labels=labels_order))
+        print("-" * 60)
+
+        if acc > best_acc:
+            best_acc = acc
+            best_pipeline = clf_pipeline
+
+    # Predict Credit Score for a new applicant
+    new_applicant = pd.DataFrame([{
+        "Age": 34,
+        "Annual_Income": 95000.0,
+        "Num_Bank_Accounts": 2,
+        "Num_Credit_Card": 3,
+        "Interest_Rate": 8,
+        "Num_of_Loan": 1,
+        "Delay_from_due_date": 3,
+        "Num_of_Delayed_Payment": 1,
+        "Credit_Utilization_Ratio": 24.5,
+        "Credit_History_Months": 144,
+        "Outstanding_Debt": 650.0,
+        "Credit_Mix": "Good",
+        "Payment_of_Min_Amount": "No",
+    }])
+
+    predicted_tier = best_pipeline.predict(new_applicant)[0]
+    predicted_probs = best_pipeline.predict_proba(new_applicant)[0]
+    class_names = best_pipeline.named_steps["classifier"].classes_
+
+    print("\n=== New Applicant Prediction ===")
+    print(f"Predicted Credit Score Tier: {predicted_tier}")
+    for cls, prob in zip(class_names, predicted_probs):
+        print(f"  P({cls}) = {prob:.4f}")
+
+output :
+
+Dataset Shape: (600, 14)
+Class Distribution:
+ Credit_Score
+Standard    319
+Poor        149
+Good        132
+Name: count, dtype: int64 
+
+=== Logistic Regression ===
+Test Accuracy: 90.00%
+
+Classification Report:
+              precision    recall  f1-score   support
+
+        Poor       0.87      0.90      0.89        30
+    Standard       0.92      0.91      0.91        64
+        Good       0.88      0.88      0.88        26
+
+    accuracy                           0.90       120
+   macro avg       0.89      0.90      0.89       120
+weighted avg       0.90      0.90      0.90       120
+
+Confusion Matrix (Rows=Actual, Cols=Predicted [Poor, Standard, Good]):
+[[27  3  0]
+ [ 4 58  2]
+ [ 0  3 23]]
+------------------------------------------------------------
+=== Random Forest ===
+Test Accuracy: 86.67%
+...
+=== New Applicant Prediction ===
+Predicted Credit Score Tier: Good
+  P(Good) = 0.9999
+  P(Poor) = 0.0000
+  P(Standard) = 0.0001
