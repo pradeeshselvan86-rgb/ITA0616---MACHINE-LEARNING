@@ -1,0 +1,167 @@
+import numpy as np
+import pandas as pd
+from sklearn.datasets import load_iris
+from sklearn.linear_model import Perceptron
+from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
+from sklearn.model_selection import train_test_split
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler
+
+
+class BinaryPerceptronScratch:
+    """Single-layer Perceptron trained with the perceptron learning rule."""
+
+    def __init__(self, learning_rate=0.01, epochs=100, random_state=42):
+        self.lr = learning_rate
+        self.epochs = epochs
+        self.random_state = random_state
+        self.weights = None
+        self.bias = 0.0
+        self.errors_per_epoch = []
+
+    def fit(self, X, y_signed):
+        """
+        X: array of shape (n_samples, n_features)
+        y_signed: array of shape (n_samples,) with values in {-1, +1}
+        """
+        X = np.asarray(X, dtype=float)
+        y_signed = np.asarray(y_signed, dtype=int)
+        rng = np.random.default_rng(self.random_state)
+
+        n_samples, n_features = X.shape
+        self.weights = np.zeros(n_features, dtype=float)
+        self.bias = 0.0
+        self.errors_per_epoch = []
+
+        for _ in range(self.epochs):
+            errors = 0
+            indices = rng.permutation(n_samples)
+            for idx in indices:
+                x_i = X[idx]
+                target = y_signed[idx]
+                linear_out = float(np.dot(self.weights, x_i) + self.bias)
+                pred = 1 if linear_out >= 0.0 else -1
+
+                if pred != target:
+                    update = self.lr * target
+                    self.weights += update * x_i
+                    self.bias += update
+                    errors += 1
+
+            self.errors_per_epoch.append(errors)
+            if errors == 0:
+                break
+
+        return self
+
+    def predict(self, X):
+        X = np.asarray(X, dtype=float)
+        linear_out = X @ self.weights + self.bias
+        return np.where(linear_out >= 0.0, 1, -1)
+
+
+def standardize_splits(X_train, X_test):
+    mean = np.mean(X_train, axis=0)
+    std = np.std(X_train, axis=0)
+    std = np.where(std == 0.0, 1.0, std)
+    return (X_train - mean) / std, (X_test - mean) / std
+
+
+def main():
+    iris = load_iris()
+    X = pd.DataFrame(iris.data, columns=iris.feature_names)
+    y = pd.Series(iris.target, name="species")
+    species_names = iris.target_names  # ['setosa', 'versicolor', 'virginica']
+
+    # ==============================================================
+    # Part 1: Binary Perceptron from Scratch (Setosa vs. Non-Setosa)
+    # ==============================================================
+    X_train_raw, X_test_raw, y_train, y_test = train_test_split(
+        X.to_numpy(), y.to_numpy(), test_size=0.20, random_state=42, stratify=y
+    )
+    X_train_sc, X_test_sc = standardize_splits(X_train_raw, X_test_raw)
+
+    # +1 for 'setosa' (class 0), -1 for others
+    y_train_bin = np.where(y_train == 0, 1, -1)
+    y_test_bin = np.where(y_test == 0, 1, -1)
+
+    scratch_perceptron = BinaryPerceptronScratch(learning_rate=0.05, epochs=100, random_state=42)
+    scratch_perceptron.fit(X_train_sc, y_train_bin)
+
+    bin_preds = scratch_perceptron.predict(X_test_sc)
+    bin_acc = accuracy_score(y_test_bin, bin_preds)
+
+    print("=== Part 1: Scratch Binary Perceptron (Setosa vs. Rest) ===")
+    print(f"Epochs run: {len(scratch_perceptron.errors_per_epoch)} | Final epoch errors: {scratch_perceptron.errors_per_epoch[-1]}")
+    print(f"Test Accuracy: {bin_acc * 100:.2f}% ({np.sum(bin_preds == y_test_bin)}/{len(y_test_bin)})")
+    print("Weights:", np.round(scratch_perceptron.weights, 4), "| Bias:", round(scratch_perceptron.bias, 4), "\n")
+
+    # ==============================================================
+    # Part 2: Multi-Class Perceptron (All 3 Iris Species via scikit-learn)
+    # ==============================================================
+    multi_clf = Pipeline([
+        ("scaler", StandardScaler()),
+        ("perceptron", Perceptron(eta0=0.05, max_iter=1000, tol=1e-3, random_state=42)),
+    ])
+    multi_clf.fit(X_train_raw, y_train)
+    multi_preds = multi_clf.predict(X_test_raw)
+    multi_acc = accuracy_score(y_test, multi_preds)
+
+    print("=== Part 2: Multi-Class Perceptron (All 3 Species) ===")
+    print(f"Test Accuracy: {multi_acc * 100:.2f}% ({np.sum(multi_preds == y_test)}/{len(y_test)})\n")
+    print("Confusion Matrix (Rows = Actual, Cols = Predicted):")
+    cm = confusion_matrix(y_test, multi_preds)
+    print(pd.DataFrame(cm, index=species_names, columns=species_names), "\n")
+    print("Classification Report:")
+    print(classification_report(y_test, multi_preds, target_names=species_names, digits=4))
+
+    # Predict species for new Iris flower measurements
+    new_flowers = pd.DataFrame(
+        [
+            [5.1, 3.5, 1.4, 0.2],  # Typical setosa
+            [5.8, 2.7, 4.1, 1.0],  # Typical versicolor
+            [6.7, 3.3, 5.7, 2.5],  # Typical virginica
+        ],
+        columns=iris.feature_names,
+    )
+    new_preds = multi_clf.predict(new_flowers)
+    print("=== New Flower Predictions ===")
+    for idx, (row, pred_id) in enumerate(zip(new_flowers.to_dict(orient="records"), new_preds), start=1):
+        print(f"Flower {idx} {row} -> Predicted: {species_names[pred_id]}")
+
+
+if __name__ == "__main__":
+    main()
+
+output:
+
+
+=== Part 1: Scratch Binary Perceptron (Setosa vs. Rest) ===
+Epochs run: 2 | Final epoch errors: 0
+Test Accuracy: 100.00% (30/30)
+Weights: [-0.0725  0.1419 -0.1753 -0.172 ] | Bias: -0.05 
+
+=== Part 2: Multi-Class Perceptron (All 3 Species) ===
+Test Accuracy: 93.33% (28/30)
+
+Confusion Matrix (Rows = Actual, Cols = Predicted):
+            setosa  versicolor  virginica
+setosa          10           0          0
+versicolor       0           8          2
+virginica        0           0         10
+
+Classification Report:
+              precision    recall  f1-score   support
+
+      setosa     1.0000    1.0000    1.0000        10
+  versicolor     1.0000    0.8000    0.8889        10
+   virginica     0.8333    1.0000    0.9091        10
+
+    accuracy                         0.9333        30
+   macro avg     0.9444    0.9333    0.9327        30
+weighted avg     0.9444    0.9333    0.9327        30
+
+=== New Flower Predictions ===
+Flower 1 {'sepal length (cm)': 5.1, 'sepal width (cm)': 3.5, 'petal length (cm)': 1.4, 'petal width (cm)': 0.2} -> Predicted: setosa
+Flower 2 {'sepal length (cm)': 5.8, 'sepal width (cm)': 2.7, 'petal length (cm)': 4.1, 'petal width (cm)': 1.0} -> Predicted: versicolor
+Flower 3 {'sepal length (cm)': 6.7, 'sepal width (cm)': 3.3, 'petal length (cm)': 5.7, 'petal width (cm)': 2.5} -> Predicted: virginica
