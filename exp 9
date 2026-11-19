@@ -1,0 +1,90 @@
+import numpy as np
+
+
+def build_poly_features(x, degree):
+    """Create polynomial design matrix [x^1, x^2, ..., x^degree] for 1D array x."""
+    x = np.asarray(x, dtype=float).reshape(-1, 1)
+    return np.hstack([x ** d for d in range(1, degree + 1)])
+
+
+def standardize_features(X_train, X_test):
+    """Standardize using training statistics only to avoid data leakage."""
+    mean = np.mean(X_train, axis=0)
+    std = np.std(X_train, axis=0)
+    std = np.where(std == 0, 1.0, std)
+    return (X_train - mean) / std, (X_test - mean) / std
+
+
+def fit_ols(X_scaled, y):
+    """Fit linear weights + bias using least squares: [1, X_scaled] @ theta = y."""
+    ones = np.ones((X_scaled.shape[0], 1), dtype=float)
+    X_b = np.hstack([ones, X_scaled])
+    theta, _, _, _ = np.linalg.lstsq(X_b, y, rcond=None)
+    bias = float(theta[0])
+    weights = theta[1:]
+    return weights, bias
+
+
+def predict_ols(X_scaled, weights, bias):
+    return (X_scaled @ weights + bias).ravel()
+
+
+def regression_metrics(y_true, y_pred):
+    y_true = np.asarray(y_true, dtype=float)
+    y_pred = np.asarray(y_pred, dtype=float)
+    mse = float(np.mean((y_true - y_pred) ** 2))
+    ss_res = np.sum((y_true - y_pred) ** 2)
+    ss_tot = np.sum((y_true - np.mean(y_true)) ** 2)
+    r2 = float(1.0 - (ss_res / ss_tot)) if ss_tot > 0 else 0.0
+    return mse, r2
+
+
+if __name__ == "__main__":
+    rng = np.random.default_rng(42)
+    n_samples = 100
+
+    # Non-linear ground truth: y = 2.0 + 1.5*x - 0.8*x^2 + noise
+    x_raw = rng.uniform(-3.0, 3.0, size=n_samples)
+    noise = rng.normal(0.0, 0.8, size=n_samples)
+    y_all = 2.0 + 1.5 * x_raw - 0.8 * (x_raw ** 2) + noise
+
+    # 70% Train / 30% Test split
+    perm = rng.permutation(n_samples)
+    x_raw, y_all = x_raw[perm], y_all[perm]
+    split = int(0.7 * n_samples)
+
+    x_train, x_test = x_raw[:split], x_raw[split:]
+    y_train, y_test = y_all[:split], y_all[split:]
+
+    degrees_to_compare = [1, 2, 8]
+
+    print(f"{'Degree':<8} {'Model Type':<22} {'Train MSE':<12} {'Test MSE':<12} {'Test R2':<10}")
+    print("-" * 68)
+
+    for deg in degrees_to_compare:
+        X_tr_poly = build_poly_features(x_train, deg)
+        X_te_poly = build_poly_features(x_test, deg)
+
+        X_tr_sc, X_te_sc = standardize_features(X_tr_poly, X_te_poly)
+        w, b = fit_ols(X_tr_sc, y_train)
+
+        train_pred = predict_ols(X_tr_sc, w, b)
+        test_pred = predict_ols(X_te_sc, w, b)
+
+        train_mse, _ = regression_metrics(y_train, train_pred)
+        test_mse, test_r2 = regression_metrics(y_test, test_pred)
+
+        label = "Linear Regression" if deg == 1 else f"Polynomial (deg={deg})"
+        print(f"{deg:<8} {label:<22} {train_mse:<12.4f} {test_mse:<12.4f} {test_r2:<10.4f}")
+
+
+
+
+output : 
+
+
+Degree   Model Type             Train MSE    Test MSE     Test R2   
+--------------------------------------------------------------------
+1        Linear Regression      4.9963       4.7250       0.3204    
+2        Polynomial (deg=2)     0.5882       0.6808       0.9021    
+8        Polynomial (deg=8)     0.5250       0.7931       0.8860
