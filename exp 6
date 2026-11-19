@@ -1,0 +1,124 @@
+import numpy as np
+
+
+class GaussianNaiveBayes:
+    def __init__(self, var_smoothing=1e-9):
+        self.var_smoothing = var_smoothing
+        self.classes = None
+        self.priors = None
+        self.means = None
+        self.vars = None
+
+    def fit(self, X, y):
+        X = np.asarray(X, dtype=float)
+        y = np.asarray(y)
+        self.classes = np.unique(y)
+
+        n_samples, n_features = X.shape
+        n_classes = len(self.classes)
+
+        self.priors = np.zeros(n_classes, dtype=float)
+        self.means = np.zeros((n_classes, n_features), dtype=float)
+        self.vars = np.zeros((n_classes, n_features), dtype=float)
+
+        for idx, c in enumerate(self.classes):
+            X_c = X[y == c]
+            self.priors[idx] = len(X_c) / n_samples
+            self.means[idx] = np.mean(X_c, axis=0)
+            self.vars[idx] = np.var(X_c, axis=0) + self.var_smoothing
+
+        return self
+
+    def _log_posterior(self, x):
+        log_posteriors = []
+        for idx in range(len(self.classes)):
+            log_prior = np.log(self.priors[idx])
+            mean = self.means[idx]
+            var = self.vars[idx]
+
+            log_likelihood = -0.5 * np.sum(
+                np.log(2.0 * np.pi * var) + ((x - mean) ** 2) / var
+            )
+            log_posteriors.append(log_prior + log_likelihood)
+        return np.array(log_posteriors)
+
+    def predict(self, X):
+        X = np.asarray(X, dtype=float)
+        preds = [self.classes[np.argmax(self._log_posterior(x))] for x in X]
+        return np.array(preds)
+
+
+def compute_confusion_matrix(y_true, y_pred, labels):
+    """Build an N x N confusion matrix where rows = Actual, cols = Predicted."""
+    label_to_idx = {lbl: i for i, lbl in enumerate(labels)}
+    cm = np.zeros((len(labels), len(labels)), dtype=int)
+    for actual, pred in zip(y_true, y_pred):
+        if actual in label_to_idx and pred in label_to_idx:
+            cm[label_to_idx[actual], label_to_idx[pred]] += 1
+    return cm
+
+
+def compute_accuracy(y_true, y_pred):
+    y_true = np.asarray(y_true)
+    y_pred = np.asarray(y_pred)
+    return float(np.mean(y_true == y_pred))
+
+
+def print_confusion_matrix(cm, labels):
+    col_width = max(12, *(len(str(lbl)) + 2 for lbl in labels))
+    header = f"{'Actual \\ Pred':<16}" + "".join(f"{str(lbl):>{col_width}}" for lbl in labels)
+    print(header)
+    print("-" * len(header))
+    for i, row_lbl in enumerate(labels):
+        row_str = f"{str(row_lbl):<16}" + "".join(f"{cm[i, j]:>{col_width}d}" for j in range(len(labels)))
+        print(row_str)
+
+
+if __name__ == "__main__":
+    # Reproducible sample dataset with two classes and three numeric features
+    rng = np.random.default_rng(42)
+    n_per_class = 75
+
+    X_class0 = rng.normal(loc=[2.0, 3.0, 1.5], scale=[1.0, 1.2, 0.8], size=(n_per_class, 3))
+    y_class0 = np.zeros(n_per_class, dtype=int)
+
+    X_class1 = rng.normal(loc=[5.0, 6.0, 4.0], scale=[1.1, 1.0, 0.9], size=(n_per_class, 3))
+    y_class1 = np.ones(n_per_class, dtype=int)
+
+    X = np.vstack([X_class0, X_class1])
+    y = np.concatenate([y_class0, y_class1])
+
+    # Shuffle and split 80% train / 20% test
+    indices = rng.permutation(len(X))
+    X, y = X[indices], y[indices]
+
+    split_idx = int(0.8 * len(X))
+    X_train, X_test = X[:split_idx], X[split_idx:]
+    y_train, y_test = y[:split_idx], y[split_idx:]
+
+    # Train and evaluate
+    model = GaussianNaiveBayes().fit(X_train, y_train)
+    y_pred = model.predict(X_test)
+
+    class_labels = [0, 1]
+    cm = compute_confusion_matrix(y_test, y_pred, class_labels)
+    acc = compute_accuracy(y_test, y_pred)
+
+    print("=== Naïve Bayes Evaluation Results ===\n")
+    print("Confusion Matrix:")
+    print_confusion_matrix(cm, class_labels)
+    print(f"\nAccuracy: {acc * 100:.2f}% ({np.sum(y_test == y_pred)}/{len(y_test)} test samples correct)")
+
+
+    output : 
+
+
+    === Naïve Bayes Evaluation Results ===
+
+Confusion Matrix:
+Actual \ Pred             0           1
+----------------------------------------
+0                      17           0
+1                       0          13
+
+Accuracy: 100.00% (30/30 test samples correct)
