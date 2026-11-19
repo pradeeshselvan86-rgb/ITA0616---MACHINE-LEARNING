@@ -1,30 +1,207 @@
-{
-  "nbformat": 4,
-  "nbformat_minor": 0,
-  "metadata": {
-    "colab": {
-      "provenance": [],
-      "authorship_tag": "ABX9TyPWOtRIgpmy7XbEgtnHP5vi",
-      "include_colab_link": true
-    },
-    "kernelspec": {
-      "name": "python3",
-      "display_name": "Python 3"
-    },
-    "language_info": {
-      "name": "python"
+import numpy as np
+import pandas as pd
+from sklearn.compose import ColumnTransformer
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.impute import SimpleImputer
+from sklearn.linear_model import LinearRegression
+from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+from sklearn.model_selection import train_test_split
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
+
+
+def create_sample_car_dataset(n_samples=600, current_year=2026, seed=42):
+    """
+    Generate a realistic used-car dataset with numerical and categorical attributes
+    and target column 'Selling_Price' (in thousands of currency units, e.g., USDk or INR Lakhs).
+    """
+    rng = np.random.default_rng(seed)
+
+    year = rng.integers(2008, current_year, size=n_samples)
+    car_age = np.maximum(current_year - year, 0)
+
+    present_price = rng.uniform(5.0, 45.0, size=n_samples)  # New/ex-showroom equivalent price
+    kms_driven = (
+        car_age * rng.uniform(7000.0, 22000.0, size=n_samples)
+        + rng.normal(0.0, 8000.0, size=n_samples)
+    ).clip(1500.0, 250000.0)
+
+    engine_cc = rng.choice([800, 1000, 1200, 1500, 2000, 2500], size=n_samples, p=[0.10, 0.18, 0.28, 0.24, 0.14, 0.06])
+    owner = rng.integers(0, 4, size=n_samples)  # 0 = first owner, 1 = second owner, etc.
+
+    fuel_type = rng.choice(["Petrol", "Diesel", "CNG"], size=n_samples, p=[0.52, 0.40, 0.08])
+    seller_type = rng.choice(["Dealer", "Individual"], size=n_samples, p=[0.60, 0.40])
+    transmission = rng.choice(["Manual", "Automatic"], size=n_samples, p=[0.72, 0.28])
+
+    # Domain-inspired valuation with depreciation, mileage wear, and non-linear interactions
+    depreciation_factor = np.exp(-0.095 * car_age)
+    mileage_penalty = (kms_driven / 100000.0) * 1.4
+    owner_penalty = owner * 0.9
+
+    fuel_adj = np.where(fuel_type == "Diesel", 1.8, np.where(fuel_type == "Petrol", 0.4, -0.5))
+    trans_adj = np.where(transmission == "Automatic", 1.5, 0.0)
+    seller_adj = np.where(seller_type == "Dealer", 0.8, 0.0)
+    engine_adj = ((engine_cc - 1200.0) / 500.0) * 1.1
+
+    selling_price = (
+        present_price * depreciation_factor
+        - mileage_penalty
+        - owner_penalty
+        + fuel_adj
+        + trans_adj
+        + seller_adj
+        + engine_adj
+        + rng.normal(0.0, 1.2, size=n_samples)
+    ).clip(0.5, None)
+
+    df = pd.DataFrame({
+        "Year": year,
+        "Present_Price": np.round(present_price, 2),
+        "Kms_Driven": np.round(kms_driven, 0),
+        "Engine_CC": engine_cc,
+        "Owner": owner,
+        "Fuel_Type": fuel_type,
+        "Seller_Type": seller_type,
+        "Transmission": transmission,
+        "Selling_Price": np.round(selling_price, 2),
+    })
+    return df
+
+
+def add_engineered_features(df, current_year=2026):
+    out = df.copy()
+    if "Year" in out.columns:
+        out["Car_Age"] = np.maximum(current_year - out["Year"], 0)
+    return out
+
+
+def evaluate_regressor(name, y_true, y_pred):
+    mae = mean_absolute_error(y_true, y_pred)
+    rmse = float(np.sqrt(mean_squared_error(y_true, y_pred)))
+    r2 = r2_score(y_true, y_pred)
+    print(f"=== {name} ===")
+    print(f"  MAE : {mae:.4f}")
+    print(f"  RMSE: {rmse:.4f}")
+    print(f"  R^2 : {r2:.4f}\n")
+    return {"MAE": mae, "RMSE": rmse, "R2": r2}
+
+
+if __name__ == "__main__":
+    CURRENT_YEAR = 2026
+
+    # To load your own CSV dataset instead, replace the next line with:
+    # df = pd.read_csv("car_data.csv")
+    df = create_sample_car_dataset(n_samples=600, current_year=CURRENT_YEAR, seed=42)
+    df = add_engineered_features(df, current_year=CURRENT_YEAR)
+
+    print("Dataset Shape:", df.shape)
+    print(df.head(), "\n")
+
+    target_col = "Selling_Price"
+    X = df.drop(columns=[target_col])
+    y = df[target_col]
+
+    numeric_cols = X.select_dtypes(include=["int64", "float64"]).columns.tolist()
+    categorical_cols = X.select_dtypes(include=["object", "category"]).columns.tolist()
+
+    numeric_pipeline = Pipeline(steps=[
+        ("imputer", SimpleImputer(strategy="median")),
+        ("scaler", StandardScaler()),
+    ])
+
+    categorical_pipeline = Pipeline(steps=[
+        ("imputer", SimpleImputer(strategy="most_frequent")),
+        ("onehot", OneHotEncoder(handle_unknown="ignore")),
+    ])
+
+    preprocessor = ColumnTransformer(transformers=[
+        ("num", numeric_pipeline, numeric_cols),
+        ("cat", categorical_pipeline, categorical_cols),
+    ])
+
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=0.20, random_state=42
+    )
+
+    candidates = {
+        "Linear Regression": LinearRegression(),
+        "Random Forest Regressor": RandomForestRegressor(
+            n_estimators=250, max_depth=14, random_state=42, n_jobs=-1
+        ),
     }
-  },
-  "cells": [
-    {
-      "cell_type": "markdown",
-      "metadata": {
-        "id": "view-in-github",
-        "colab_type": "text"
-      },
-      "source": [
-        "<a href=\"https://colab.research.google.com/github/pradeeshselvan86-rgb/ITA0616---MACHINE-LEARNING/blob/main/exp13\" target=\"_parent\"><img src=\"https://colab.research.google.com/assets/colab-badge.svg\" alt=\"Open In Colab\"/></a>"
-      ]
-    }
-  ]
-}
+
+    best_model = None
+    best_r2 = -np.inf
+
+    for model_name, regressor in candidates.items():
+        pipe = Pipeline(steps=[
+            ("preprocessor", preprocessor),
+            ("regressor", regressor),
+        ])
+        pipe.fit(X_train, y_train)
+        y_pred = pipe.predict(X_test)
+        metrics = evaluate_regressor(model_name, y_test, y_pred)
+
+        if metrics["R2"] > best_r2:
+            best_r2 = metrics["R2"]
+            best_model = pipe
+
+    # Predict selling price for new car listings
+    new_cars = add_engineered_features(
+        pd.DataFrame([
+            {
+                "Year": 2022,
+                "Present_Price": 14.0,
+                "Kms_Driven": 24000.0,
+                "Engine_CC": 1500,
+                "Owner": 0,
+                "Fuel_Type": "Petrol",
+                "Seller_Type": "Dealer",
+                "Transmission": "Automatic",
+            },
+            {
+                "Year": 2015,
+                "Present_Price": 18.5,
+                "Kms_Driven": 95000.0,
+                "Engine_CC": 2000,
+                "Owner": 2,
+                "Fuel_Type": "Diesel",
+                "Seller_Type": "Individual",
+                "Transmission": "Manual",
+            },
+        ]),
+        current_year=CURRENT_YEAR,
+    )
+
+    predicted_prices = best_model.predict(new_cars)
+    print("=== Predicted Selling Prices for New Listings ===")
+    for idx, (row, price) in enumerate(zip(new_cars.to_dict(orient="records"), predicted_prices), start=1):
+        print(
+            f"Car {idx} ({row['Year']}, {row['Fuel_Type']}, {row['Transmission']}, "
+            f"{int(row['Kms_Driven']):,} km) -> Predicted Price: {price:.2f}"
+        )
+
+output: 
+
+
+Dataset Shape: (600, 10)
+   Year  Present_Price  Kms_Driven  Engine_CC  Owner Fuel_Type Seller_Type Transmission  Selling_Price  Car_Age
+0  2018          32.51     74418.0       1500      2    Petrol      Dealer       Manual          12.87        8
+1  2014          26.44    171770.0       1200      0    Diesel      Dealer       Manual           6.35       12
+2  2014          15.58    126502.0       1000      0    Petrol  Individual       Manual           2.84       12
+3  2011          41.73    250000.0       1500      2    Petrol      Dealer       Manual           7.54       15
+4  2020          20.66     35224.0       1500      1    Petrol  Individual       Manual          10.75        6
+
+=== Linear Regression ===
+  MAE : 1.0734
+  RMSE: 1.3849
+  R^2 : 0.9636
+
+=== Random Forest Regressor ===
+  MAE : 1.0457
+  RMSE: 1.3510
+  R^2 : 0.9653
+
+=== Predicted Selling Prices for New Listings ===
+Car 1 (2022, Petrol, Automatic, 24,000 km) -> Predicted Price: 10.67
+Car 2 (2015, Diesel, Manual, 95,000 km) -> Predicted Price: 5.56
